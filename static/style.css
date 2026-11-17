@@ -460,3 +460,18 @@ padding:24px}
 *{animation:none!important;
 transition:none!important}
 }
+
+.router-notice {font:11px/1.7 monospace;color:var(--muted);margin:0 0 13px;overflow-wrap:anywhere;}
+.router-notice.warning {color:var(--secondary);}
+.router-cards {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}
+.router-card {padding:20px;min-height:130px;}
+.router-card strong {display:block;font:15px/1.5 monospace;margin:20px 0 12px;}
+.router-card small {font:10px/1.6 monospace;color:var(--muted);display:block;}
+.positive {color:var(--good);}
+.router-probes {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:12px;}
+.router-probe {border-left:2px solid var(--line);padding:4px 12px;min-width:0;}
+.router-probe span {display:block;font:12px/1.6 monospace;margin:9px 0;}
+.router-probe small {font:9px/1.6 monospace;color:var(--muted);overflow-wrap:anywhere;}
+.router-stale {opacity:.5;}
+@media(max-width:1100px) {.router-cards,.router-probes{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:700px) {.router-card{padding:16px;}.router-card strong{font-size:13px;}.router-card .panel-label{letter-spacing:0;}}

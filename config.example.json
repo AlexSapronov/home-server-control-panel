@@ -6,7 +6,28 @@
     "ca_file": "/etc/nerv/pve-root-ca.pem"
   },
   "services": [
-    {"name": "Proxmox VE", "url": "https://192.168.10.2:8006", "description": "Гипервизор / VM и контейнеры"},
-    {"name": "OpenWrt", "url": "http://192.168.10.1", "description": "Маршрутизатор / LuCI"}
-  ]
+    {
+      "name": "Proxmox VE",
+      "url": "https://192.168.10.2:8006",
+      "description": "Гипервизор / VM и контейнеры"
+    },
+    {
+      "name": "OpenWrt",
+      "url": "http://192.168.10.1",
+      "description": "Маршрутизатор / LuCI"
+    },
+    {
+      "name": "AdGuard Home",
+      "url": "http://192.168.10.1:3001",
+      "description": "DNS / фильтрация запросов"
+    }
+  ],
+  "openwrt": {
+    "enabled": false,
+    "host": "192.168.10.1",
+    "identity_file": "/etc/nerv/ssh/openwrt_ed25519",
+    "known_hosts_file": "/etc/nerv/ssh/known_hosts",
+    "adguard_port": 3001,
+    "telegram_port": 1443
+  }
 }

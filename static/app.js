@@ -11,8 +11,30 @@ function guests() {
   const rows=(current?.guests || []).filter(g=>$('guest-filter').value==='all'||g.status===$('guest-filter').value);
   $('guests').innerHTML=rows.map(g=>`<tr><td><span class="vm-id">${esc(g.vmid)}</span>${esc(g.name)}<small>${g.type==='qemu'?'Виртуальная машина':'Контейнер'}</small></td><td>${esc(g.type.toUpperCase())}<small>${esc(g.node)}</small></td><td>${badge(g.status)}</td><td>${g.status==='running'?fmt(g.cpu*100,1)+' %':'—'}</td><td>${bytes(g.mem)}<small>из ${bytes(g.maxmem)}</small></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Машины не найдены</td></tr>';
 }
+function renderRouter(router = {state:'not_configured'}) {
+  const states = {running:'Процесс запущен',stopped:'Процесс остановлен',unknown:'Нет данных',not_configured:'Не настроен',configured_down:'Настроен, не поднят',up:'Интерфейс поднят'};
+  const connected = {connected:'SSH / CONNECTED',demo:'DEMO / ПРИМЕР',unavailable:'SSH / НЕТ СВЯЗИ',not_configured:'НЕ ПОДКЛЮЧЁН'};
+  $('router-connection').textContent=connected[router.state]||'НЕТ ДАННЫХ';
+  const notice = router.error || (router.state==='not_configured'?'Мониторинг OpenWrt не подключён. Настройте ограниченный SSH-ключ по инструкции в docs/openwrt.md.':'');
+  $('router-notice').textContent=notice+(router.stale?' Показаны устаревшие данные служб.':'')+(router.checked_at?' Последний сбор: '+new Date(router.checked_at*1000).toLocaleTimeString('ru-RU'):'');
+  $('router-notice').classList.toggle('warning',!!router.error);
+  const cards=(router.services||[]).map(service=>({name:service.name,state:service.state,detail:'Состояние процесса на роутере'}));
+  if(router.amneziawg) {
+    const wg=router.amneziawg;
+    cards.push({name:'AmneziaWG',state:wg.state,detail:wg.state==='up'?(Number.isFinite(wg.handshake_age)?'Последний handshake: '+fmt(wg.handshake_age)+' с назад':'Handshake пока не зарегистрирован'):'Конфигурация и интерфейс туннеля'});
+  }
+  $('router-cards').classList.toggle('router-stale',!!router.stale);
+  $('router-cards').innerHTML=cards.map(c=>`<article class="panel router-card"><div class="panel-label">${esc(c.name)}</div><strong class="${c.state==='running'?'positive':''}">${esc(states[c.state]||'Нет данных')}</strong><small>${esc(c.detail)}</small></article>`).join('');
+  const probes=[];
+  if(router.wan) probes.push({name:'WAN',value:router.wan.up===true?'Интерфейс поднят':router.wan.up===false?'Интерфейс не поднят':'Нет данных',detail:(router.wan.addresses||[]).join(', '),ok:router.wan.up===true,stale:router.stale});
+  if(router.probes) {
+    probes.push({name:'DNS / UDP 53',value:router.probes.dns==='resolved'?'Имя разрешено':'Нет успешного ответа',detail:'example.com через роутер',ok:router.probes.dns==='resolved'});
+    for(const [key,name] of [['adguard_tcp','AdGuard / TCP'],['telegram_tcp','Telegram / TCP']]) probes.push({name,value:router.probes[key]==='reachable'?'Порт доступен':'Порт недоступен',detail:'Соединение из контейнера панели',ok:router.probes[key]==='reachable'});
+  }
+  $('router-probes').innerHTML=probes.map(p=>`<div class="router-probe ${p.stale?'router-stale':''}"><small>${esc(p.name)}</small><span class="${p.ok&&!p.stale?'positive':''}">${esc(p.value)}</span><small>${esc(p.detail)}</small></div>`).join('');
+}
 function render(data) {
-  current=data; document.body.classList.remove('stale');
+  current=data; renderRouter(data.router); document.body.classList.remove('stale');
   $('title').textContent=data.title;
   $('mode').textContent=data.mode==='demo'?'● DEMO MODE / ДЕМОНСТРАЦИОННЫЕ ДАННЫЕ':'● LIVE / PROXMOX API';
   $('config-mode').textContent=data.mode==='demo'?'демонстрационные данные':'живые данные Proxmox';

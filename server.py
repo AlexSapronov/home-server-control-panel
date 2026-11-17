@@ -9,6 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from openwrt import router_snapshot, demo_router
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
@@ -84,7 +85,9 @@ def demo_snapshot():
 def snapshot(config):
     data = demo_snapshot() if config.get('mode', 'demo') == 'demo' else Proxmox(config['proxmox']).snapshot()
     return dict(data, mode=config.get('mode', 'demo'), updated_at=int(time.time()),
-                services=config.get('services', []), title=config.get('title', 'HOME SERVER'))
+                services=config.get('services', []), title=config.get('title', 'HOME SERVER'),
+                router=demo_router() if config.get('mode', 'demo') == 'demo'
+                else router_snapshot(config.get('openwrt', {})))
 
 
 class Handler(SimpleHTTPRequestHandler):
