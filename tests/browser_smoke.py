@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 Path("docs").mkdir(exist_ok=True)
 from playwright.sync_api import sync_playwright
@@ -8,6 +9,9 @@ with sync_playwright() as p:
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto('http://127.0.0.1:8080')
     page.wait_for_selector('#guests tr')
+    assert page.locator('#router-cards article').count()==4
+    assert 'Не настроен' in page.locator('#router-cards').inner_text()
+    assert 'Имя разрешено' in page.locator('#router-probes').inner_text()
     page.screenshot(path='docs/dashboard.png', full_page=True)
     assert 'DEMO MODE' in page.locator('#mode').inner_text()
     page.select_option('#guest-filter', 'stopped')
@@ -19,6 +23,16 @@ with sync_playwright() as p:
     page.locator('#settings').click()
     assert page.locator('#config-dialog').is_visible()
     page.locator('.primary').click()
+    demo=page.request.get('http://127.0.0.1:8080/api/status').json()
+    demo['router']['state']='unavailable'
+    demo['router']['stale']=True
+    demo['router']['error']='SSH unavailable'
+    page.route('**/api/status', lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps(demo)))
+    page.locator('#refresh').click()
+    page.locator('#router-cards.router-stale').wait_for(state='attached')
+    assert 'устаревшие' in page.locator('#router-notice').inner_text()
+    assert 'Имя разрешено' in page.locator('#router-probes').inner_text()
+    page.unroute('**/api/status')
     page.route('**/api/status',lambda route:route.fulfill(status=502,content_type='application/json',body='{"error":"Test offline"}'))
     page.locator('#refresh').click()
     page.locator("body.stale").wait_for(state="attached")
