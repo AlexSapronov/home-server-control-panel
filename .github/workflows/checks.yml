@@ -1,0 +1,33 @@
+name: Checks and UI preview
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m unittest discover -s tests -v
+      - run: node --check static/app.js
+      - run: pip install playwright==1.58.0
+      - run: python -m playwright install --with-deps chromium
+      - name: Browser smoke checks
+        run: |
+          cp config.example.json config.json
+          python server.py > /tmp/nerv-server.log 2>&1 &
+          for attempt in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8080/api/status > /dev/null && break
+            sleep 1
+          done
+          python tests/browser_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nerv-preview
+          path: docs/*.png

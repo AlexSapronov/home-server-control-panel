@@ -1,0 +1,12 @@
+{
+  "mode": "demo",
+  "title": "HOME SERVER",
+  "proxmox": {
+    "url": "https://192.168.10.2:8006",
+    "ca_file": "/etc/nerv/pve-root-ca.pem"
+  },
+  "services": [
+    {"name": "Proxmox VE", "url": "https://192.168.10.2:8006", "description": "Гипервизор / VM и контейнеры"},
+    {"name": "OpenWrt", "url": "http://192.168.10.1", "description": "Маршрутизатор / LuCI"}
+  ]
+}
