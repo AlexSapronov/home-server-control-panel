@@ -1,0 +1,7 @@
+{
+  "panel_url": "https://nerv.example.net",
+  "ca_file": "/etc/nerv-dpi/ca.pem",
+  "token_file": "/etc/nerv-dpi/lan.token",
+  "dns_host": "192.168.10.1",
+  "yt_dlp": "/usr/local/bin/yt-dlp"
+}

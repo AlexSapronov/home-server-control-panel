@@ -1,0 +1,21 @@
+[Unit]
+Description=NERV DPI LAN probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nerv
+Group=nerv
+WorkingDirectory=/opt/home-server-control-panel
+ExecStart=/usr/bin/python3 /opt/home-server-control-panel/dpi_worker.py lan /etc/nerv-dpi/lan.json
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+LimitFSIZE=16777216
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
