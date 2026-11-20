@@ -206,11 +206,14 @@ document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{document.querySelec
 let awgState=null, awgBusy=false;
 function awgControls(disabled) {
   $('awg-refresh').disabled=awgBusy;
-  $('awg-domain').disabled=$('awg-add').disabled=disabled;
-  document.querySelectorAll('[data-awg-remove]').forEach(button=>button.disabled=disabled);
+  for(const id of ['awg-domain','awg-add','awg-extra','awg-preset']) $(id).disabled=disabled;
+  document.querySelectorAll('[data-awg-toggle],[data-awg-save],[data-awg-domains]').forEach(control=>control.disabled=disabled);
 }
 function renderAwg() {
-  $('awg-list').innerHTML=awgState.rules.map(rule=>`<article class="awg-rule"><div><strong>${esc(rule.name)}</strong>${rule.enabled?'':' <span class="badge off">Отключено</span>'}<p>${rule.domains.map(esc).join(' · ')}</p></div><button type="button" data-awg-remove="${esc(rule.id)}" aria-label="Убрать ${esc(rule.name)} из AWG">Убрать из AWG</button></article>`).join('')||'<p class="empty">Сайтов в списке пока нет.</p>';
+  $('awg-list').innerHTML=awgState.rules.map(rule=>`<article class="awg-rule"><div><strong>${esc(rule.name)}</strong><p>${rule.enabled?'Через туннель AWG':'Обычный маршрут сети'}</p><details class="awg-domain-editor"><summary>Домены (${rule.domains.length})</summary><label>Домены и поддомены<textarea data-awg-domains="${esc(rule.id)}" rows="4" aria-label="Домены ${esc(rule.name)}">${esc(rule.domains.join('\n'))}</textarea></label><button type="button" data-awg-save="${esc(rule.id)}">Сохранить домены</button></details></div><button class="awg-switch" type="button" role="switch" aria-checked="${rule.enabled}" data-awg-toggle="${esc(rule.id)}" aria-label="AWG для ${esc(rule.name)}"><span aria-hidden="true"></span>${rule.enabled?'Вкл':'Выкл'}</button></article>`).join('')||'<p class="empty">Сайтов в списке пока нет.</p>';
+  const selected=$('awg-preset').value;
+  $('awg-preset').innerHTML='<option value="">Свой сайт</option>'+(awgState.presets||[]).map(preset=>`<option value="${esc(preset.domain)}">${esc(preset.name)}</option>`).join('');
+  $('awg-preset').value=selected;
 }
 async function awgRequest(payload) {
   if(awgBusy) return;
@@ -224,7 +227,7 @@ async function awgRequest(payload) {
     const response=await fetch('/api/router/awg-sites',options), data=await response.json();
     if(!response.ok) throw Error(data.error||'Не удалось получить настройки AWG.');
     awgState=data; renderAwg();
-    if(payload?.action==='add') $('awg-domain').value='';
+    if(payload?.action==='add') {$('awg-domain').value='';$('awg-extra').value='';$('awg-preset').value='';}
     $('awg-feedback').textContent=payload?'Изменения применены для всей сети. Переподключитесь к сайту, чтобы открыть новое соединение.':'Список получен с OpenWrt.';
   } catch(error) {
     awgState=null;
@@ -232,12 +235,24 @@ async function awgRequest(payload) {
     $('awg-feedback').textContent=error.name==='AbortError'?'Ответ не получен. Обновите список перед повтором: изменение могло примениться.':error.message;
   } finally {clearTimeout(timeout);awgBusy=false;awgControls(!awgState);}
 }
-$('awg-form').onsubmit=event=>{event.preventDefault();if(awgState&&!awgBusy)awgRequest({action:'add',domain:$('awg-domain').value.trim()});};
+function splitDomains(value) {return value.split(/[\s,;]+/).filter(Boolean);}
+$('awg-preset').onchange=()=>{
+  const preset=awgState?.presets?.find(item=>item.domain===$('awg-preset').value);
+  $('awg-domain').value=preset?.domain||'';
+  $('awg-extra').value=preset?.domains.slice(1).join('\n')||'';
+};
+$('awg-form').onsubmit=event=>{event.preventDefault();if(awgState&&!awgBusy)awgRequest({action:'add',domain:$('awg-domain').value.trim(),extra_domains:splitDomains($('awg-extra').value)});};
 $('awg-refresh').onclick=()=>awgRequest();
 $('awg-list').onclick=event=>{
-  const button=event.target.closest('[data-awg-remove]');
+  const button=event.target.closest('[data-awg-toggle],[data-awg-save]');
   if(!button||button.disabled||!awgState||awgBusy)return;
-  awgRequest({action:'remove',id:button.dataset.awgRemove});
+  if(button.dataset.awgToggle) {
+    const rule=awgState.rules.find(item=>item.id===button.dataset.awgToggle);
+    if(rule)awgRequest({action:'set_enabled',id:rule.id,enabled:!rule.enabled});
+  } else {
+    const editor=[...document.querySelectorAll('[data-awg-domains]')].find(item=>item.dataset.awgDomains===button.dataset.awgSave);
+    if(editor)awgRequest({action:'update_domains',id:button.dataset.awgSave,domains:splitDomains(editor.value)});
+  }
 };
 awgRequest();
 function clock(){$('clock').textContent=new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});}clock();setInterval(clock,1000);

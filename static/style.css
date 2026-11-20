@@ -491,6 +491,20 @@ transition:none!important}
 .awg-panel .note {margin:16px 0}
 .awg-rule {padding:16px 0;border-top:1px solid var(--line)}
 .awg-rule>div {min-width:0}
+.awg-rule>div {flex:1}
+.awg-domain-editor {margin-top:10px;font-size:12px}
+.awg-domain-editor summary {cursor:pointer;color:var(--accent)}
+.awg-domain-editor label {display:block;margin:10px 0}
+.awg-panel textarea {display:block;width:100%;box-sizing:border-box;background:var(--panel);color:inherit;border:1px solid var(--line);padding:10px;font:12px/1.6 monospace;resize:vertical}
+.awg-switch {display:flex;align-items:center;gap:10px;min-width:108px;justify-content:center}
+.awg-switch span {width:28px;height:16px;background:var(--line);border-radius:12px;position:relative}
+.awg-switch span::after {content:'';position:absolute;width:12px;height:12px;background:var(--muted);top:2px;left:2px;border-radius:50%}
+.awg-switch[aria-checked="true"] {color:var(--good)}
+.awg-switch[aria-checked="true"] span {background:var(--good)}
+.awg-switch[aria-checked="true"] span::after {left:14px;background:var(--panel)}
+#awg-form select {margin:0 0 12px;max-width:100%}
+#awg-extra {margin-top:8px}
+#awg-form .awg-input {margin-bottom:14px}
 .awg-rule p {color:var(--muted);font:12px/1.8 monospace;overflow-wrap:anywhere;margin:8px 0 0}
 .awg-rule button {flex-shrink:0}
 #awg-form {border-top:1px solid var(--line);padding-top:16px}

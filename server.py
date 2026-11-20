@@ -161,7 +161,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not 0 < length <= 8192 or self.headers.get('Content-Type') != 'application/json':
                     raise ValueError
                 data = json.loads(self.rfile.read(length))
-                if (not isinstance(data, dict) or data.get('action') not in ('add', 'remove')
+                if (not isinstance(data, dict) or data.get('action') not in ('add', 'set_enabled', 'update_domains')
                         or not isinstance(data.get('revision'), str)):
                     raise ValueError
             except (ValueError, UnicodeError):

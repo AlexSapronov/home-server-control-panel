@@ -49,8 +49,8 @@ class RoutingTests(unittest.TestCase):
         with patch.object(routing, 'revision', return_value='current'), \
                 patch.object(routing, 'policies', return_value=[]), patch.object(routing, 'run') as run:
             for request in ({'action': 'add', 'domain': 'a.com', 'revision': 'old'},
-                            {'action': 'remove', 'id': 'discord', 'revision': 'current'},
-                            {'action': 'remove', 'id': 'hermes', 'revision': 'current'}):
+                            {'action': 'set_enabled', 'id': 'discord', 'enabled': False, 'revision': 'current'},
+                            {'action': 'set_enabled', 'id': 'hermes', 'enabled': False, 'revision': 'current'}):
                 with self.assertRaises(routing.RoutingError):
                     routing.apply(request)
             run.assert_not_called()
@@ -75,10 +75,10 @@ class RoutingTests(unittest.TestCase):
                     raise subprocess.CalledProcessError(1, args)
                 return ''
             with patch.object(routing, 'POLICY_FILE', config), patch.object(routing, 'BACKUPS', Path(temp)/'backups'), \
-                    patch.object(routing, 'policies', return_value=[{'id': 'youtube'}]), patch.object(routing, 'ipsets', return_value={}), \
+                    patch.object(routing, 'policies', return_value=[{'id': 'youtube', 'enabled': True, 'domains': ['youtube.com']}]), patch.object(routing, 'ipsets', return_value={}), \
                     patch.object(routing, 'run', side_effect=command):
                 with self.assertRaisesRegex(routing.RoutingError, 'восстановлены'):
-                    routing.apply({'action': 'remove', 'id': 'youtube', 'revision': routing.revision()})
+                    routing.apply({'action': 'set_enabled', 'id': 'youtube', 'enabled': False, 'revision': routing.revision()})
             self.assertEqual(config.read_bytes(), b'original config')
             self.assertEqual(calls.count(('/etc/init.d/pbr', 'restart')), 2)
             self.assertEqual(next((Path(temp)/'backups').glob('*.pbr')).read_bytes(), b'original config')
@@ -89,6 +89,33 @@ class RoutingTests(unittest.TestCase):
             routing.restore_ipsets(saved)
         operations = json.loads(run.call_args.kwargs['input'])['nftables']
         self.assertEqual(operations, [{'add': {'element': {'family': 'inet', 'table': 'fw4', 'name': 'pbr_old', 'elem': ['1.1.1.1']}}}])
+
+    def test_presets_aliases_custom_domains_and_validation(self):
+        domain, name, domains = routing.domain_group('https://www.youtube.com/watch?v=test', ['img.example.org', 'youtube.com'])
+        self.assertEqual(name, 'YouTube')
+        self.assertIn('googlevideo.com', domains)
+        self.assertIn('img.example.org', domains)
+        self.assertEqual(domains.count('youtube.com'), 1)
+        self.assertEqual(routing.domain_group('example.com', ['cdn.example.org'])[2], ['example.com', 'cdn.example.org'])
+        with self.assertRaises(routing.RoutingError):
+            routing.domain_group('example.com', 'not-a-list')
+
+    def test_toggle_preserves_rule_and_only_changes_enabled(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as temp:
+                config = Path(temp)/'pbr'
+                config.write_text('original')
+                rule = {'id': 'youtube', 'enabled': not enabled, 'domains': ['youtube.com']}
+                with patch.object(routing, 'POLICY_FILE', config), patch.object(routing, 'BACKUPS', Path(temp)/'backups'), \
+                        patch.object(routing, 'policies', return_value=[rule]), patch.object(routing, 'ipsets', return_value={}), \
+                        patch.object(routing, 'run', return_value='') as run, patch.object(routing, 'warm_domains') as warm:
+                    routing.apply({'action': 'set_enabled', 'id': 'youtube', 'enabled': enabled, 'revision': routing.revision()})
+                mutations = [call.args for call in run.call_args_list if call.args[:2] in [('uci','set'),('uci','delete')]]
+                self.assertEqual(mutations, [('uci', 'set', f'pbr.youtube.enabled={int(enabled)}')])
+                if enabled:
+                    warm.assert_called_once_with(['youtube.com'])
+                else:
+                    warm.assert_not_called()
 
     def test_panel_key_has_no_shell_and_payload_uses_stdin(self):
         config = {'enabled': True, 'routing_enabled': True, 'host': '192.168.10.1',

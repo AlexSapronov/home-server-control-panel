@@ -60,7 +60,7 @@ def policies():
         sections.setdefault(section, {})[option or '_type'] = ' '.join(shlex.split(raw))
     result = []
     for section, item in sections.items():
-        # Never expose a machine-wide or otherwise restricted policy for deletion.
+        # Never expose a machine-wide or otherwise restricted policy for changes.
         if (item.get('_type') != 'policy' or item.get('interface') != 'awg0'
                 or any(value for key, value in item.items() if key not in
                        {'_type', 'name', 'interface', 'dest_addr', 'enabled'})):
@@ -81,7 +81,23 @@ def revision():
 
 
 def state():
-    return {'rules': policies(), 'revision': revision(), 'scope': 'all-lan'}
+    return {'rules': policies(), 'revision': revision(), 'scope': 'all-lan',
+            'presets': [{'domain': domain, 'name': name, 'domains': domains.split()}
+                        for domain, (name, domains) in PRESETS.items()]}
+
+
+def domain_group(primary, extra=None):
+    domain = domain_name(primary)
+    canonical = domain.removeprefix('www.')
+    canonical = {'youtu.be': 'youtube.com', 'twitter.com': 'x.com',
+                 'chat.openai.com': 'chatgpt.com'}.get(canonical, canonical)
+    name, defaults = PRESETS.get(canonical, (domain, domain))
+    if extra is None:
+        extra = []
+    if not isinstance(extra, list) or len(extra) > 32:
+        raise RoutingError('Можно указать не более 32 дополнительных доменов.')
+    domains = list(dict.fromkeys(defaults.split() + [domain_name(value) for value in extra]))
+    return domain, name, domains
 
 
 def ipsets():
@@ -121,28 +137,41 @@ def apply(request):
     action = request.get('action')
     if action == 'list':
         return state()
-    if action not in ('add', 'remove'):
+    if action not in ('add', 'set_enabled', 'update_domains'):
         raise RoutingError('Неизвестная операция.')
     if request.get('revision') != revision():
         raise RoutingError('Список изменён. Обновите его и повторите действие.', 'conflict')
     current = policies()
     if action == 'add':
-        domain = domain_name(request.get('domain'))
-        if any(domain == d or domain.endswith('.' + d) for r in current if r['enabled'] for d in r['domains']):
-            raise RoutingError('Этот сайт уже направлен через AWG.', 'conflict')
-        name, domains = PRESETS.get(domain, (domain, domain))
+        domain, name, domains = domain_group(request.get('domain'), request.get('extra_domains'))
+        if any(domain == d or domain.endswith('.' + d) for r in current for d in r['domains']):
+            raise RoutingError('Этот сайт уже сохранён. Используйте его переключатель.', 'conflict')
         section = 'nerv_' + hashlib.sha256(domain.encode()).hexdigest()[:16]
         # A pre-existing disabled rule or manually created section must not be overwritten.
         if subprocess.run(['uci', '-q', 'get', 'pbr.' + section], capture_output=True).returncode == 0:
-            raise RoutingError('Правило уже существует. Удалите его перед добавлением.', 'conflict')
+            raise RoutingError('Правило уже существует. Обновите список сайтов.', 'conflict')
         commands = [('set', f'pbr.{section}=policy'), ('set', f'pbr.{section}.name={name}'),
-                    ('set', f'pbr.{section}.interface=awg0'), ('set', f'pbr.{section}.dest_addr={domains}'),
+                    ('set', f'pbr.{section}.interface=awg0'), ('set', f'pbr.{section}.dest_addr={" ".join(domains)}'),
                     ('set', f'pbr.{section}.enabled=1'), ('reorder', f'pbr.{section}=2')]
     else:
         section = request.get('id')
-        if not any(r['id'] == section for r in current):
-            raise RoutingError('Правило недоступно для удаления.', 'conflict')
-        commands = [('delete', 'pbr.' + section)]
+        rule = next((r for r in current if r['id'] == section), None)
+        if rule is None:
+            raise RoutingError('Правило недоступно для изменения.', 'conflict')
+        if action == 'set_enabled':
+            enabled = request.get('enabled')
+            if type(enabled) is not bool:
+                raise RoutingError('Укажите состояние переключателя.')
+            if rule['enabled'] == enabled:
+                return state()
+            commands = [('set', f'pbr.{section}.enabled={int(enabled)}')]
+            domains = rule['domains'] if enabled else []
+        else:
+            values = request.get('domains')
+            if not isinstance(values, list) or not 1 <= len(values) <= 40:
+                raise RoutingError('Укажите от 1 до 40 доменов.')
+            domains = list(dict.fromkeys(domain_name(value) for value in values))
+            commands = [('set', f'pbr.{section}.dest_addr={" ".join(domains)}')]
     # Refuse to commit someone else's pending LuCI/UCI edits.
     if run('uci', 'changes', 'pbr').strip():
         raise RoutingError('На роутере есть несохранённые изменения PBR. Сначала примените их в LuCI.', 'conflict')
@@ -163,9 +192,13 @@ def apply(request):
         for rule in policies():
             if rule['enabled']:
                 run('nft', 'list', 'set', 'inet', 'fw4', 'pbr_awg0_4_dst_ip_' + rule['id'])
-        restore_ipsets(saved_ipsets)
-        if action == 'add':
-            warm_domains(domains.split())
+        # A changed list must not retain IPs belonging to removed domains;
+        # keep the full snapshot separately for rollback.
+        retained = {name: values for name, values in saved_ipsets.items()
+                    if action != 'update_domains' or name != 'pbr_awg0_4_dst_ip_' + section}
+        restore_ipsets(retained)
+        if action in ('add', 'update_domains') or request.get('enabled') is True:
+            warm_domains(domains)
     except (OSError, subprocess.SubprocessError):
         run('uci', 'revert', 'pbr')
         POLICY_FILE.write_bytes(original)

@@ -83,7 +83,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='Подтвердить', exact=True).click()
     page.get_by_text('Media · пример · операция выполнена.').wait_for()
     assert requests == [('POST', 'guest-power')]
-    awg = {'rules': [{'id': 'youtube', 'name': 'YouTube', 'domains': ['youtube.com', 'googlevideo.com'], 'enabled': True}], 'revision': 'r1'}
+    awg = {'rules': [{'id': 'youtube', 'name': 'YouTube', 'domains': ['youtube.com', 'googlevideo.com'], 'enabled': True}], 'revision': 'r1', 'presets': [{'domain':'x.com','name':'X','domains':['x.com','twitter.com','twimg.com','t.co']}]}
     awg_requests = []
     def awg_api(route):
         if route.request.method == 'POST':
@@ -92,21 +92,39 @@ with sync_playwright() as p:
             assert route.request.headers.get('x-nerv-action') == 'awg-routing'
             if payload['action'] == 'add':
                 awg['rules'].append({'id': 'new', 'name': 'example.com', 'domains': ['example.com'], 'enabled': True})
-            else:
-                awg['rules'] = [rule for rule in awg['rules'] if rule['id'] != payload['id']]
+            elif payload['action'] == 'set_enabled':
+                next(rule for rule in awg['rules'] if rule['id'] == payload['id'])['enabled'] = payload['enabled']
+            elif payload['action'] == 'update_domains':
+                next(rule for rule in awg['rules'] if rule['id'] == payload['id'])['domains'] = payload['domains']
             awg['revision'] = 'r' + str(len(awg_requests) + 1)
         route.fulfill(json=awg)
     page.route('**/api/router/awg-sites', awg_api)
     page.click('#awg-refresh')
-    page.get_by_role('button', name='Убрать YouTube из AWG', exact=True).wait_for()
+    page.get_by_role('switch', name='AWG для YouTube', exact=True).wait_for()
+    page.select_option('#awg-preset', 'x.com')
+    assert page.input_value('#awg-domain') == 'x.com'
+    assert 'twimg.com' in page.input_value('#awg-extra')
+    page.select_option('#awg-preset', '')
     page.fill('#awg-domain', 'https://example.com/path')
     page.click('#awg-add')
-    page.get_by_role('button', name='Убрать example.com из AWG', exact=True).wait_for()
+    toggle = page.get_by_role('switch', name='AWG для example.com', exact=True)
+    toggle.wait_for()
     assert 'для всей сети' in page.locator('#awg-feedback').inner_text()
-    assert awg_requests[0] == {'action': 'add', 'domain': 'https://example.com/path', 'revision': 'r1'}
-    page.get_by_role('button', name='Убрать example.com из AWG', exact=True).click()
-    page.wait_for_function("!document.querySelector('[data-awg-remove=\"new\"]')")
-    assert awg_requests[1] == {'action': 'remove', 'id': 'new', 'revision': 'r2'}
+    assert awg_requests[0] == {'action': 'add', 'domain': 'https://example.com/path', 'extra_domains': [], 'revision': 'r1'}
+    toggle.click()
+    # Locator assertions work with CSP enabled in bundled headless Chromium.
+    from playwright.sync_api import expect
+    expect(toggle).to_have_attribute('aria-checked', 'false')
+    assert awg_requests[1] == {'action': 'set_enabled', 'id': 'new', 'enabled': False, 'revision': 'r2'}
+    assert page.locator('[data-awg-toggle="new"]').count() == 1
+    toggle.click()
+    expect(toggle).to_have_attribute('aria-checked', 'true')
+    assert awg_requests[2]['enabled'] is True
+    page.locator('.awg-rule').filter(has=toggle).locator('summary').click()
+    page.get_by_role('textbox', name='Домены example.com', exact=True).fill('example.com\ncdn.example.org')
+    page.locator('[data-awg-save="new"]').click()
+    expect(page.locator('#awg-feedback')).to_contain_text('Изменения применены')
+    assert awg_requests[3]['domains'] == ['example.com', 'cdn.example.org']
     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
     page.screenshot(path='docs/awg-mobile.png', full_page=True)
     page.set_viewport_size({'width':1440,'height':1080})
@@ -116,7 +134,7 @@ with sync_playwright() as p:
     page.click('#awg-refresh')
     page.get_by_text('OpenWrt недоступен', exact=True).wait_for()
     assert page.locator('#awg-add').is_disabled()
-    assert page.get_by_role('button', name='Убрать YouTube из AWG', exact=True).is_disabled()
+    assert page.get_by_role('switch', name='AWG для YouTube', exact=True).is_disabled()
     assert not errors, errors
     browser.close()
 print('Browser checks passed: filtering, theme persistence, dialog, API failure/recovery, mobile overflow, no JS errors.')
