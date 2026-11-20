@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from openwrt import router_snapshot, demo_router
+from openwrt import router_snapshot, demo_router, routing_request, RoutingError
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request, urlopen
@@ -150,6 +150,23 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             return
+        if self.path == '/api/router/awg-sites':
+            if not self.routing_allowed():
+                return
+            if (self.headers.get('X-NERV-Action') != 'awg-routing'
+                    or self.headers.get('Sec-Fetch-Site', 'same-origin') != 'same-origin'):
+                return self.send_json(403, {'error': 'Действие разрешено только из панели.'})
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 8192 or self.headers.get('Content-Type') != 'application/json':
+                    raise ValueError
+                data = json.loads(self.rfile.read(length))
+                if (not isinstance(data, dict) or data.get('action') not in ('add', 'remove')
+                        or not isinstance(data.get('revision'), str)):
+                    raise ValueError
+            except (ValueError, UnicodeError):
+                return self.send_json(400, {'error': 'Некорректный запрос.'})
+            return self.awg_response(data)
         match = re.fullmatch(r'/api/guests/([1-9][0-9]{2,8})/(start|shutdown|reboot)', self.path)
         if not match:
             return self.send_json(404, {'error': 'Неизвестная операция.'})
@@ -177,7 +194,10 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if not self.authorized():
             return
-        if self.path == '/api/status':
+        if self.path == '/api/router/awg-sites':
+            if self.routing_allowed():
+                self.awg_response({'action': 'list'})
+        elif self.path == '/api/status':
             try:
                 data, code = snapshot(self.server.config), 200
             except (KeyError, ValueError, ConnectionError, OSError):
@@ -200,6 +220,22 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         self.send_error(405)
+
+    def routing_allowed(self):
+        config = self.server.config
+        if (config.get('mode') != 'live' or not os.environ.get('NERV_PASSWORD')
+                or not config.get('openwrt', {}).get('routing_enabled')):
+            self.send_json(403, {'error': 'Управление сайтами AWG не подключено или недоступно без пароля.'})
+            return False
+        return True
+
+    def awg_response(self, data):
+        try:
+            result = routing_request(self.server.config.get('openwrt', {}), data)
+        except RoutingError as error:
+            code = {'disabled': 403, 'invalid': 400, 'conflict': 409}.get(error.code, 502)
+            return self.send_json(code, {'error': str(error)})
+        self.send_json(200, result)
 
     def log_message(self, fmt, *args):
         # Never log Authorization headers or configuration.

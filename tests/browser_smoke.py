@@ -1,9 +1,10 @@
 import json
+import os
 from pathlib import Path
 Path("docs").mkdir(exist_ok=True)
 from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
+    browser = p.chromium.launch(headless=True, executable_path=os.environ.get('BROWSER_EXECUTABLE') or None)
     page=browser.new_page(viewport={'width':1440,'height':1080}, device_scale_factor=1)
     errors=[]
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -82,6 +83,40 @@ with sync_playwright() as p:
     page.get_by_role('button', name='Подтвердить', exact=True).click()
     page.get_by_text('Media · пример · операция выполнена.').wait_for()
     assert requests == [('POST', 'guest-power')]
+    awg = {'rules': [{'id': 'youtube', 'name': 'YouTube', 'domains': ['youtube.com', 'googlevideo.com'], 'enabled': True}], 'revision': 'r1'}
+    awg_requests = []
+    def awg_api(route):
+        if route.request.method == 'POST':
+            payload = route.request.post_data_json
+            awg_requests.append(payload)
+            assert route.request.headers.get('x-nerv-action') == 'awg-routing'
+            if payload['action'] == 'add':
+                awg['rules'].append({'id': 'new', 'name': 'example.com', 'domains': ['example.com'], 'enabled': True})
+            else:
+                awg['rules'] = [rule for rule in awg['rules'] if rule['id'] != payload['id']]
+            awg['revision'] = 'r' + str(len(awg_requests) + 1)
+        route.fulfill(json=awg)
+    page.route('**/api/router/awg-sites', awg_api)
+    page.click('#awg-refresh')
+    page.get_by_role('button', name='Убрать YouTube из AWG', exact=True).wait_for()
+    page.fill('#awg-domain', 'https://example.com/path')
+    page.click('#awg-add')
+    page.get_by_role('button', name='Убрать example.com из AWG', exact=True).wait_for()
+    assert 'для всей сети' in page.locator('#awg-feedback').inner_text()
+    assert awg_requests[0] == {'action': 'add', 'domain': 'https://example.com/path', 'revision': 'r1'}
+    page.get_by_role('button', name='Убрать example.com из AWG', exact=True).click()
+    page.wait_for_function("!document.querySelector('[data-awg-remove=\"new\"]')")
+    assert awg_requests[1] == {'action': 'remove', 'id': 'new', 'revision': 'r2'}
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    page.screenshot(path='docs/awg-mobile.png', full_page=True)
+    page.set_viewport_size({'width':1440,'height':1080})
+    page.screenshot(path='docs/awg-desktop.png', full_page=True)
+    page.unroute('**/api/router/awg-sites')
+    page.route('**/api/router/awg-sites', lambda route: route.fulfill(status=502,json={'error':'OpenWrt недоступен'}))
+    page.click('#awg-refresh')
+    page.get_by_text('OpenWrt недоступен', exact=True).wait_for()
+    assert page.locator('#awg-add').is_disabled()
+    assert page.get_by_role('button', name='Убрать YouTube из AWG', exact=True).is_disabled()
     assert not errors, errors
     browser.close()
 print('Browser checks passed: filtering, theme persistence, dialog, API failure/recovery, mobile overflow, no JS errors.')

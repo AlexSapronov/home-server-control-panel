@@ -203,5 +203,42 @@ $('guests').onclick = event => {
 $('refresh').onclick=refresh;
 $('settings').onclick=()=>$('config-dialog').showModal();
 document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{document.querySelectorAll('nav a').forEach(n=>n.classList.toggle('active',n===a));});
+let awgState=null, awgBusy=false;
+function awgControls(disabled) {
+  $('awg-refresh').disabled=awgBusy;
+  $('awg-domain').disabled=$('awg-add').disabled=disabled;
+  document.querySelectorAll('[data-awg-remove]').forEach(button=>button.disabled=disabled);
+}
+function renderAwg() {
+  $('awg-list').innerHTML=awgState.rules.map(rule=>`<article class="awg-rule"><div><strong>${esc(rule.name)}</strong>${rule.enabled?'':' <span class="badge off">Отключено</span>'}<p>${rule.domains.map(esc).join(' · ')}</p></div><button type="button" data-awg-remove="${esc(rule.id)}" aria-label="Убрать ${esc(rule.name)} из AWG">Убрать из AWG</button></article>`).join('')||'<p class="empty">Сайтов в списке пока нет.</p>';
+}
+async function awgRequest(payload) {
+  if(awgBusy) return;
+  awgBusy=true; awgControls(true);
+  $('awg-feedback').classList.remove('failure');
+  $('awg-feedback').textContent=payload?'Применяем изменения на роутере…':'Загрузка списка…';
+  const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),160000);
+  try {
+    const options={signal:controller.signal};
+    if(payload) Object.assign(options,{method:'POST',headers:{'Content-Type':'application/json','X-NERV-Action':'awg-routing'},body:JSON.stringify({...payload,revision:awgState.revision})});
+    const response=await fetch('/api/router/awg-sites',options), data=await response.json();
+    if(!response.ok) throw Error(data.error||'Не удалось получить настройки AWG.');
+    awgState=data; renderAwg();
+    if(payload?.action==='add') $('awg-domain').value='';
+    $('awg-feedback').textContent=payload?'Изменения применены для всей сети. Переподключитесь к сайту, чтобы открыть новое соединение.':'Список получен с OpenWrt.';
+  } catch(error) {
+    awgState=null;
+    $('awg-feedback').classList.add('failure');
+    $('awg-feedback').textContent=error.name==='AbortError'?'Ответ не получен. Обновите список перед повтором: изменение могло примениться.':error.message;
+  } finally {clearTimeout(timeout);awgBusy=false;awgControls(!awgState);}
+}
+$('awg-form').onsubmit=event=>{event.preventDefault();if(awgState&&!awgBusy)awgRequest({action:'add',domain:$('awg-domain').value.trim()});};
+$('awg-refresh').onclick=()=>awgRequest();
+$('awg-list').onclick=event=>{
+  const button=event.target.closest('[data-awg-remove]');
+  if(!button||button.disabled||!awgState||awgBusy)return;
+  awgRequest({action:'remove',id:button.dataset.awgRemove});
+};
+awgRequest();
 function clock(){$('clock').textContent=new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});}clock();setInterval(clock,1000);
 refresh();setInterval(()=>{if(!document.hidden)refresh();},5000);
