@@ -136,5 +136,20 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(status, 502)
         self.assertNotIn(b'secret-value', body)
 
+    def test_site_diagnostics_auth_same_origin_and_fixed_action(self):
+        config = {'mode':'live', 'openwrt':{'routing_enabled':True}}
+        auth = base64.b64encode(b'admin:test-password').decode()
+        headers = {'Authorization':'Basic '+auth, 'Content-Type':'application/json', 'X-NERV-Action':'site-diagnostics'}
+        path = '/api/router/diagnose'
+        body = json.dumps({'target':'rutracker.org', 'action':'set_enabled', 'enabled':False})
+        with patch.dict(os.environ, {'NERV_PASSWORD':'test-password'}), patch.object(self.server, 'config', config), \
+                patch('server.routing_request', return_value={'read_only':True,'dns':{}}) as request:
+            self.assertEqual(self.request(path, method='POST', body=body)[0], 401)
+            self.assertEqual(self.request(path, dict(headers, **{'Sec-Fetch-Site':'cross-site'}), 'POST', body)[0], 403)
+            self.assertEqual(self.request(path, headers, 'POST', 'not-json')[0], 400)
+            request.assert_not_called()
+            self.assertEqual(self.request(path, headers, 'POST', body)[0], 200)
+            request.assert_called_once_with(config['openwrt'], {'action':'diagnose', 'target':'rutracker.org'})
+
 if __name__ == '__main__':
     unittest.main()

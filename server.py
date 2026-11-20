@@ -150,6 +150,22 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             return
+        if self.path == '/api/router/diagnose':
+            if not self.routing_allowed():
+                return
+            if (self.headers.get('X-NERV-Action') != 'site-diagnostics'
+                    or self.headers.get('Sec-Fetch-Site', 'same-origin') != 'same-origin'):
+                return self.send_json(403, {'error': 'Проверка доступна только из панели.'})
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 4096 or self.headers.get('Content-Type') != 'application/json':
+                    raise ValueError
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict) or not isinstance(data.get('target'), str):
+                    raise ValueError
+            except (ValueError, UnicodeError):
+                return self.send_json(400, {'error': 'Укажите домен или ссылку для проверки.'})
+            return self.awg_response({'action': 'diagnose', 'target': data['target']})
         if self.path == '/api/router/awg-sites':
             if not self.routing_allowed():
                 return

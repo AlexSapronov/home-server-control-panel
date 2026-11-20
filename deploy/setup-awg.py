@@ -20,6 +20,9 @@ base64.b64decode(parts[1], validate=True)
 helper = Path('/usr/libexec/nerv-routing.py')
 helper.write_text(payload['helper'])
 helper.chmod(0o644)
+diagnostics = Path('/usr/libexec/nerv_diagnostics.py')
+diagnostics.write_text(payload['diagnostics'])
+diagnostics.chmod(0o644)
 authorized = Path('/etc/dropbear/authorized_keys')
 backup = authorized.with_name('authorized_keys.before-nerv-awg')
 if not backup.exists():
@@ -32,7 +35,7 @@ authorized.write_text('\n'.join(lines) + '\n')
 authorized.chmod(0o600)
 upgrade = Path('/etc/sysupgrade.conf')
 entries = upgrade.read_text().splitlines()
-for path in ('/usr/libexec/nerv-routing.py', '/etc/nerv-routing-backups/'):
+for path in ('/usr/libexec/nerv-routing.py', '/usr/libexec/nerv_diagnostics.py', '/etc/nerv-routing-backups/'):
     if path not in entries:
         entries.append(path)
 upgrade.write_text('\n'.join(entries) + '\n')
@@ -52,7 +55,8 @@ def main():
         subprocess.run(['runuser', '-u', 'nerv', '--', 'ssh-keygen', '-q', '-t', 'ed25519',
                         '-N', '', '-C', 'nerv-panel-awg', '-f', str(identity)], check=True)
     payload = {'public_key': identity.with_suffix('.pub').read_text(),
-               'helper': (ROOT / 'deploy/openwrt-routing.py').read_text()}
+               'helper': (ROOT / 'deploy/openwrt-routing.py').read_text(),
+               'diagnostics': (ROOT / 'deploy/nerv_diagnostics.py').read_text()}
     subprocess.run(['ssh', '-F', '/dev/null', '-T', '-o', 'StrictHostKeyChecking=yes',
                     '-o', 'UserKnownHostsFile=' + router['known_hosts_file'],
                     'root@' + host, 'python3', '-c', shlex.quote(REMOTE_INSTALL)],

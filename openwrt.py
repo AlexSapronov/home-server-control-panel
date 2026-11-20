@@ -162,8 +162,13 @@ def routing_request(config, payload):
             if code not in ('invalid', 'conflict', 'unavailable'):
                 code = 'unavailable'
             raise RoutingError(str(result['error'])[:300], code)
-        if not isinstance(result.get('rules'), list) or not isinstance(result.get('revision'), str):
+        if payload.get('action') == 'diagnose':
+            if result.get('read_only') is not True or not isinstance(result.get('dns'), dict):
+                raise ValueError
+        elif not isinstance(result.get('rules'), list) or not isinstance(result.get('revision'), str):
             raise ValueError
         return result
     except (KeyError, ValueError, TypeError, AttributeError, OSError, subprocess.SubprocessError):
+        if payload.get('action') == 'diagnose':
+            raise RoutingError('Нет ответа диагностики OpenWrt. Сетевые настройки не изменялись.') from None
         raise RoutingError('Нет ответа OpenWrt. Обновите список перед повтором: операция могла примениться.') from None
