@@ -6,10 +6,94 @@ const pct = (a,b) => Number.isFinite(a) && b > 0 ? Math.max(0,Math.min(100,a/b*1
 const bytes = v => Number.isFinite(v) ? (v >= 1024**4 ? fmt(v/1024**4,2)+' TiB' : fmt(v/1024**3,1)+' GiB') : '—';
 const esc = s => String(s ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function bar(id, value) { $(id).innerHTML = Array.from({length:24},(_,i)=>`<i class="${value!==null && i<Math.ceil(value/100*24)?'on':''}"></i>`).join(''); }
-function badge(status) { const good=['running','online','available','OK'].includes(status); return `<span class="badge ${good?'':status==='stopped'?'off':'bad'}">${esc(status)}</span>`; }
+function badge(status, label = status) { const good=['running','online','available','OK'].includes(status); return `<span class="badge ${good?'':status==='stopped'?'off':'bad'}">${esc(label)}</span>`; }
+const powerLabels = {start:'Запустить', shutdown:'Выключить', reboot:'Перезагрузить'};
+const guestStatuses = {running:'Запущена', stopped:'Выключена', paused:'Приостановлена'};
+const pendingGuests = new Set();
+let guestMarkup = '';
+
 function guests() {
-  const rows=(current?.guests || []).filter(g=>$('guest-filter').value==='all'||g.status===$('guest-filter').value);
-  $('guests').innerHTML=rows.map(g=>`<tr><td><span class="vm-id">${esc(g.vmid)}</span>${esc(g.name)}<small>${g.type==='qemu'?'Виртуальная машина':'Контейнер'}</small></td><td>${esc(g.type.toUpperCase())}<small>${esc(g.node)}</small></td><td>${badge(g.status)}</td><td>${g.status==='running'?fmt(g.cpu*100,1)+' %':'—'}</td><td>${bytes(g.mem)}<small>из ${bytes(g.maxmem)}</small></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Машины не найдены</td></tr>';
+  const status = $('guest-filter').value, type = $('guest-type').value;
+  const query = $('guest-search').value.trim().toLowerCase();
+  const rows = (current?.guests || []).filter(g =>
+    (status === 'all' || g.status === status) && (type === 'all' || g.type === type) &&
+    [g.name, g.vmid, g.node].some(value => String(value ?? '').toLowerCase().includes(query))
+  ).sort((a,b) => a.vmid - b.vmid);
+  const markup = rows.map(g => {
+    const allowed = current.managed_vmids?.includes(g.vmid) && !g.template;
+    const actions = g.status === 'running' ? ['shutdown', 'reboot'] : g.status === 'stopped' ? ['start'] : [];
+    const pending = pendingGuests.has(g.vmid);
+    const disabled = pending || g.lock || document.body.classList.contains('stale');
+    const buttons = allowed && actions.length ? actions.map(action =>
+      `<button type="button" data-vmid="${esc(g.vmid)}" data-power="${action}" aria-label="${powerLabels[action]} ${esc(g.name || g.vmid)}" ${disabled?'disabled':''}>${powerLabels[action]}</button>`
+    ).join('') : '—';
+    return `<tr><td><span class="vm-id">${esc(g.vmid)}</span>${esc(g.name)}<small>${g.template?'Шаблон':g.type==='qemu'?'Виртуальная машина':'Контейнер'}</small></td>
+      <td>${esc(g.type.toUpperCase())}<small>${esc(g.node)}</small></td>
+      <td>${badge(g.status, guestStatuses[g.status])}${pending?'<small>Операция выполняется</small>':''}</td>
+      <td>${g.status==='running'?fmt(g.cpu*100,1)+' %':'—'}</td><td>${bytes(g.mem)}<small>из ${bytes(g.maxmem)}</small></td>
+      <td><div class="guest-actions">${buttons}</div></td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="empty">Машины не найдены</td></tr>';
+  if (markup !== guestMarkup) {
+    const focused = document.activeElement;
+    $('guests').innerHTML = guestMarkup = markup;
+    if (focused?.dataset.power) {
+      const replacement = Array.from($('guests').querySelectorAll('button')).find(button =>
+        button.dataset.vmid === focused.dataset.vmid && button.dataset.power === focused.dataset.power);
+      replacement?.focus({preventScroll:true});
+    }
+  }
+}
+
+function powerFeedback(message, failure = false) {
+  const notice = $('guest-feedback');
+  notice.hidden = false;
+  notice.classList.toggle('failure', failure);
+  notice.textContent = message;
+}
+
+async function powerRequest(url, options) {
+  const response = await fetch(url, {...options, signal:AbortSignal.timeout(15000)});
+  const data = await response.json();
+  if (!response.ok) throw Error(data.error || 'Ошибка запроса к панели.');
+  return data;
+}
+
+async function runPower(guest, action) {
+  const name = guest.name || guest.vmid;
+  const dialog = $('power-dialog');
+  $('power-title').textContent = powerLabels[action] + ' ' + name + '?';
+  $('power-description').textContent = action === 'start' ? 'Proxmox запустит машину.' :
+    'Подключения и службы этой машины будут прерваны. Proxmox выполнит штатную операцию.';
+  dialog.returnValue = '';
+  dialog.showModal();
+  await new Promise(resolve => dialog.addEventListener('close', resolve, {once:true}));
+  if (dialog.returnValue !== 'confirm' || document.body.classList.contains('stale') || pendingGuests.has(guest.vmid)) return;
+  pendingGuests.add(guest.vmid);
+  guests();
+  powerFeedback(name + ' · отправка команды в Proxmox…');
+  try {
+    const {upid} = await powerRequest(`/api/guests/${guest.vmid}/${action}`, {
+      method:'POST', headers:{'X-NERV-Action':'guest-power'}
+    });
+    powerFeedback(name + ' · задача принята Proxmox.');
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      const task = await powerRequest('/api/power-tasks/' + encodeURIComponent(upid));
+      if (task.status === 'stopped') {
+        if (task.exitstatus !== 'OK') throw Error(task.exitstatus || 'Задача завершилась с ошибкой.');
+        powerFeedback(name + ' · операция выполнена.');
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    throw Error('Задача ещё выполняется. Проверьте журнал Proxmox.');
+  } catch (error) {
+    powerFeedback(name + ' · ' + error.message, true);
+  } finally {
+    pendingGuests.delete(guest.vmid);
+    await refresh();
+    guests();
+  }
 }
 function renderRouter(router = {state:'not_configured'}) {
   const states = {running:'Процесс запущен',stopped:'Процесс остановлен',unknown:'Нет данных',not_configured:'Не настроен',configured_down:'Настроен, не поднят',up:'Интерфейс поднят'};
@@ -65,13 +149,21 @@ async function refresh() {
   if(busy) return; busy=true; $('refresh').disabled=true;
   const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),18000);
   try {const response=await fetch('/api/status',{signal:controller.signal}); const data=await response.json(); if(!response.ok) throw Error(data.error||'Ошибка API'); render(data);}
-  catch(error) {document.body.classList.add('stale'); $('mode').textContent='● СВЯЗЬ ПОТЕРЯНА'; $('error').hidden=false; $('error').textContent=(error.name==='AbortError'?'Превышено время ожидания':error.message)+(current?' · Показаны устаревшие данные.':'');}
+  catch(error) {document.body.classList.add('stale'); guests(); $('mode').textContent='● СВЯЗЬ ПОТЕРЯНА'; $('error').hidden=false; $('error').textContent=(error.name==='AbortError'?'Превышено время ожидания':error.message)+(current?' · Показаны устаревшие данные.':'');}
   finally {clearTimeout(timeout);busy=false;$('refresh').disabled=false;}
 }
 try{$('theme').value=localStorage.getItem('nerv-theme')||'NERV';}catch{}
 document.body.dataset.theme=$('theme').value;
 $('theme').onchange=()=>{document.body.dataset.theme=$('theme').value;try{localStorage.setItem('nerv-theme',$('theme').value);}catch{}};
-$('guest-filter').onchange=guests;
+$('guest-filter').onchange = guests;
+$('guest-type').onchange = guests;
+$('guest-search').oninput = guests;
+$('guests').onclick = event => {
+  const button = event.target.closest('button[data-power]');
+  if (!button || button.disabled) return;
+  const guest = current.guests.find(g => String(g.vmid) === button.dataset.vmid);
+  if (guest) runPower(guest, button.dataset.power);
+};
 $('refresh').onclick=refresh;
 $('settings').onclick=()=>$('config-dialog').showModal();
 document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{document.querySelectorAll('nav a').forEach(n=>n.classList.toggle('active',n===a));});

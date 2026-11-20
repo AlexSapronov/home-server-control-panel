@@ -4,7 +4,7 @@ import os
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from server import Handler, Proxmox, snapshot
 
 class SnapshotTests(unittest.TestCase):
@@ -26,6 +26,19 @@ class SnapshotTests(unittest.TestCase):
         with self.assertRaises(ConnectionError):
             client.snapshot()
 
+    def test_power_uses_inventory_node_and_graceful_shutdown_for_both_types(self):
+        for kind in ('qemu', 'lxc'):
+            with self.subTest(kind=kind):
+                client = object.__new__(Proxmox)
+                guest = {'type': kind, 'vmid': 103, 'node': 'home', 'status': 'running'}
+                client.get = Mock(return_value=[guest])
+                client.request = Mock(return_value='UPID:home:task')
+                self.assertEqual(client.power(103, 'shutdown'), {'upid': 'UPID:home:task'})
+                client.request.assert_called_once_with(f'/nodes/home/{kind}/103/status/shutdown', 'POST')
+                with self.assertRaises(RuntimeError):
+                    client.power(103, 'start')
+                client.request.assert_called_once()
+
     def test_explicit_demo_without_secret(self):
         with patch.dict(os.environ, {'PROXMOX_TOKEN': 'secret-token'}):
             data = snapshot({'mode': 'demo'})
@@ -46,10 +59,10 @@ class HTTPTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
 
-    def request(self, path, headers=None):
+    def request(self, path, headers=None, method='GET'):
         import http.client
         conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port)
-        conn.request('GET', path, headers=headers or {})
+        conn.request(method, path, headers=headers or {})
         response = conn.getresponse()
         result = response.status, response.read()
         conn.close()
@@ -63,6 +76,31 @@ class HTTPTests(unittest.TestCase):
             status, body = self.request('/api/status', {'Authorization': 'Basic '+auth})
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body)['mode'], 'demo')
+
+    def test_power_requires_authentication_same_origin_and_allowlist(self):
+        config = {'mode': 'live', 'proxmox': {'managed_vmids': [103]}}
+        auth = base64.b64encode(b'admin:test-password').decode()
+        headers = {'Authorization': 'Basic ' + auth, 'X-NERV-Action': 'guest-power'}
+        path = '/api/guests/103/reboot'
+        upid = 'UPID:home:00000000:00000000:00000000:qmreboot:103:nerv@pve!panel:'
+        with patch.dict(os.environ, {'NERV_PASSWORD': 'test-password'}), \
+                patch.object(self.server, 'config', config), patch('server.Proxmox') as client:
+            client.return_value.power.return_value = {'upid': upid}
+            self.assertEqual(self.request(path, method='POST')[0], 401)
+            self.assertEqual(self.request(path, {'Authorization': headers['Authorization']}, 'POST')[0], 403)
+            self.assertEqual(self.request(path, dict(headers, **{'Sec-Fetch-Site': 'cross-site'}), 'POST')[0], 403)
+            self.assertEqual(self.request('/api/guests/100/reboot', headers, 'POST')[0], 403)
+            client.assert_not_called()
+            status, body = self.request(path, headers, 'POST')
+            self.assertEqual(status, 202)
+            self.assertEqual(json.loads(body)['upid'], upid)
+            client.return_value.power.assert_called_once_with(103, 'reboot')
+            from urllib.parse import quote
+            client.return_value.get.return_value = {'status': 'stopped', 'exitstatus': 'OK'}
+            status, body = self.request('/api/power-tasks/' + quote(upid, safe=''), headers)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body), {'status': 'stopped', 'exitstatus': 'OK'})
+            client.return_value.get.assert_called_once_with('/nodes/home/tasks/' + quote(upid, safe='') + '/status')
 
     def test_no_configuration_or_traversal(self):
         for path in ['/config.json', '/server.py', '/../config.example.json']:

@@ -475,3 +475,12 @@ transition:none!important}
 .router-stale {opacity:.5;}
 @media(max-width:1100px) {.router-cards,.router-probes{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media(max-width:700px) {.router-card{padding:16px;}.router-card strong{font-size:13px;}.router-card .panel-label{letter-spacing:0;}}
+
+#machines .table-tools {display:flex;justify-content:flex-start;gap:12px;flex-wrap:wrap;align-items:center}
+#guest-search {min-width:0;flex:1 1 170px;max-width:360px;background:var(--panel);color:inherit;border:1px solid var(--line);padding:9px 12px;font:inherit}
+.guest-actions {display:flex;gap:6px;flex-wrap:wrap;min-width:132px}
+.guest-actions button {font-size:11px;padding:7px 9px}
+.guest-actions button:disabled {opacity:.45;cursor:default}
+.guest-feedback {margin:0;padding:12px 20px;border-top:1px solid var(--line);color:var(--good);overflow-wrap:anywhere}
+.guest-feedback.failure {color:var(--secondary)}
+.power-dialog-buttons {display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}

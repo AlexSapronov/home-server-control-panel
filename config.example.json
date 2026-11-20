@@ -3,7 +3,8 @@
   "title": "HOME SERVER",
   "proxmox": {
     "url": "https://192.168.10.2:8006",
-    "ca_file": "/etc/nerv/pve-root-ca.pem"
+    "ca_file": "/etc/nerv/pve-root-ca.pem",
+    "managed_vmids": []
   },
   "services": [
     {

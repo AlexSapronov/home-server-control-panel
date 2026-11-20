@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import os
+import re
 import ssl
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -11,7 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from openwrt import router_snapshot, demo_router
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
@@ -22,6 +23,9 @@ def load_config():
     config = json.loads(path.read_text()) if path.exists() else {'mode': 'demo'}
     if config.get('mode', 'demo') not in ('demo', 'live'):
         raise ValueError('mode must be demo or live')
+    vmids = config.get('proxmox', {}).get('managed_vmids', [])
+    if not isinstance(vmids, list) or any(type(vmid) is not int or not 100 <= vmid <= 999999999 for vmid in vmids):
+        raise ValueError('managed_vmids must be a list of valid Proxmox IDs')
     for service in config.get('services', []):
         if urlsplit(service['url']).scheme not in ('http', 'https'):
             raise ValueError('Service URLs must use HTTP or HTTPS')
@@ -39,10 +43,27 @@ class Proxmox:
             raise ValueError('PROXMOX_TOKEN is not configured')
 
     def get(self, path):
+        return self.request(path)
+
+    def request(self, path, method='GET'):
         req = Request(self.url + '/api2/json' + path,
-                      headers={'Authorization': 'PVEAPIToken=' + self.token})
+                      headers={'Authorization': 'PVEAPIToken=' + self.token},
+                      method=method, data=b'' if method == 'POST' else None)
         with urlopen(req, context=self.context, timeout=5) as response:
             return json.load(response)['data']
+
+    def power(self, vmid, action):
+        guests = self.get('/cluster/resources?type=vm')
+        guest = next((g for g in guests if g.get('vmid') == vmid
+                      and g.get('type') in ('qemu', 'lxc')), None)
+        if guest is None:
+            raise LookupError
+        expected = 'stopped' if action == 'start' else 'running'
+        if guest.get('status') != expected or guest.get('template') or guest.get('lock'):
+            raise RuntimeError
+        node = guest['node']
+        path = f"/nodes/{quote(node, safe='')}/{guest['type']}/{vmid}/status/{action}"
+        return {'upid': self.request(path, 'POST')}
 
     def snapshot(self):
         errors = []
@@ -82,10 +103,16 @@ def demo_snapshot():
         'warnings': []}
 
 
+def managed_guests(config):
+    if config.get('mode') != 'live' or not os.environ.get('NERV_PASSWORD'):
+        return []
+    return config['proxmox'].get('managed_vmids', [])
+
+
 def snapshot(config):
     data = demo_snapshot() if config.get('mode', 'demo') == 'demo' else Proxmox(config['proxmox']).snapshot()
     return dict(data, mode=config.get('mode', 'demo'), updated_at=int(time.time()),
-                services=config.get('services', []), title=config.get('title', 'HOME SERVER'),
+                managed_vmids=managed_guests(config), services=config.get('services', []), title=config.get('title', 'HOME SERVER'),
                 router=demo_router() if config.get('mode', 'demo') == 'demo'
                 else router_snapshot(config.get('openwrt', {})))
 
@@ -101,7 +128,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         super().end_headers()
 
-    def do_GET(self):
+    def authorized(self):
         password = os.environ.get('NERV_PASSWORD')
         if password:
             expected = 'Basic ' + base64.b64encode(('admin:' + password).encode()).decode()
@@ -109,18 +136,63 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_response(401)
                 self.send_header('WWW-Authenticate', 'Basic realm="NERV"')
                 self.end_headers()
-                return
+                return False
+        return True
+
+    def send_json(self, code, data):
+        body = json.dumps(data, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        if not self.authorized():
+            return
+        match = re.fullmatch(r'/api/guests/([1-9][0-9]{2,8})/(start|shutdown|reboot)', self.path)
+        if not match:
+            return self.send_json(404, {'error': 'Неизвестная операция.'})
+        vmid, action = match.groups()
+        config = self.server.config
+        # A browser cannot attach this header cross-origin without a CORS preflight.
+        if (int(vmid) not in managed_guests(config)
+                or self.headers.get('X-NERV-Action') != 'guest-power'
+                or self.headers.get('Sec-Fetch-Site', 'same-origin') != 'same-origin'):
+            return self.send_json(403, {'error': 'Управление этой машиной недоступно.'})
+        try:
+            task = Proxmox(config['proxmox']).power(int(vmid), action)
+        except LookupError:
+            return self.send_json(404, {'error': 'Машина недоступна в Proxmox.'})
+        except RuntimeError:
+            return self.send_json(409, {'error': 'Текущее состояние машины не допускает эту операцию.'})
+        except HTTPError as error:
+            if error.code in (401, 403):
+                return self.send_json(403, {'error': 'Проверьте право VM.PowerMgmt для API-токена.'})
+            return self.send_json(502, {'error': 'Proxmox отклонил команду. Проверьте журнал задач.'})
+        except (OSError, ValueError):
+            return self.send_json(502, {'error': 'Ответ Proxmox не получен. Проверьте статус и журнал перед повтором.'})
+        self.send_json(202, task)
+
+    def do_GET(self):
+        if not self.authorized():
+            return
         if self.path == '/api/status':
             try:
                 data, code = snapshot(self.server.config), 200
             except (KeyError, ValueError, ConnectionError, OSError):
                 data, code = {'error': 'Нет данных Proxmox. Проверьте конфигурацию, TLS-сертификат и API-токен.'}, 502
-            body = json.dumps(data, ensure_ascii=False).encode()
-            self.send_response(code)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_json(code, data)
+        elif match := re.fullmatch(r'/api/power-tasks/(UPID:([a-zA-Z0-9_-]+):[a-zA-Z0-9_.:@!+-]{1,512})', unquote(self.path)):
+            if not managed_guests(self.server.config):
+                return self.send_json(403, {'error': 'Управление машинами недоступно.'})
+            upid, node = match.groups()
+            try:
+                task = Proxmox(self.server.config['proxmox']).get(
+                    f"/nodes/{node}/tasks/{quote(upid, safe='')}/status")
+                self.send_json(200, {'status': task.get('status'), 'exitstatus': task.get('exitstatus')})
+            except (OSError, ValueError):
+                self.send_json(502, {'error': 'Не удалось получить результат задачи Proxmox.'})
         elif urlsplit(self.path).path in ('/', '/index.html', '/app.js', '/style.css'):
             super().do_GET()
         else:
