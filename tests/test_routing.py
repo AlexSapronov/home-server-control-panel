@@ -117,6 +117,22 @@ class RoutingTests(unittest.TestCase):
                 else:
                     warm.assert_not_called()
 
+    def test_domain_edits_keep_cached_addresses_unless_a_name_is_removed(self):
+        saved = {'pbr_awg0_4_dst_ip_site': ['1.1.1.1'], 'pbr_wan_4_dst_ip_discord': ['2.2.2.2']}
+        for domains, keep in ((['example.com', 'cdn.example.org'], True),
+                              (['example.com'], True), (['new.example.org'], False)):
+            with self.subTest(domains=domains), tempfile.TemporaryDirectory() as temp:
+                config = Path(temp)/'pbr'
+                config.write_text('original')
+                rule = {'id': 'site', 'enabled': True, 'domains': ['example.com']}
+                with patch.object(routing, 'POLICY_FILE', config), patch.object(routing, 'BACKUPS', Path(temp)/'backups'), \
+                        patch.object(routing, 'policies', return_value=[rule]), patch.object(routing, 'ipsets', return_value=saved), \
+                        patch.object(routing, 'run', return_value=''), patch.object(routing, 'warm_domains'), \
+                        patch.object(routing, 'restore_ipsets') as restore:
+                    routing.apply({'action': 'update_domains', 'id': 'site', 'domains': domains, 'revision': routing.revision()})
+                expected = saved if keep else {'pbr_wan_4_dst_ip_discord': ['2.2.2.2']}
+                restore.assert_called_once_with(expected)
+
     def test_panel_key_has_no_shell_and_payload_uses_stdin(self):
         config = {'enabled': True, 'routing_enabled': True, 'host': '192.168.10.1',
                   'routing_identity_file': '/routing-key', 'known_hosts_file': '/hosts'}

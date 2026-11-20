@@ -18,7 +18,7 @@ LOCK = Path('/var/lock/nerv-routing.lock')
 PRESETS = {
     'youtube.com': ('YouTube', 'youtube.com youtube-nocookie.com youtu.be googlevideo.com ytimg.com youtubei.googleapis.com youtube.googleapis.com ggpht.com'),
     'x.com': ('X', 'x.com twitter.com twimg.com t.co'),
-    'chatgpt.com': ('ChatGPT', 'chatgpt.com chat.openai.com auth.openai.com auth0.openai.com oaistatic.com oaiusercontent.com oaistatsig.com cdn.openaimerge.com cdn.platform.openai.com'),
+    'chatgpt.com': ('ChatGPT', 'chatgpt.com openai.com oaistatic.com oaiusercontent.com oaistatsig.com cdn.openaimerge.com challenges.cloudflare.com cdn.workos.com forwarder.workos.com frontend-apps-multi-region.workos.com images.workoscdn.com setup.workos.com workos.imgix.net'),
 }
 
 
@@ -142,6 +142,7 @@ def apply(request):
     if request.get('revision') != revision():
         raise RoutingError('Список изменён. Обновите его и повторите действие.', 'conflict')
     current = policies()
+    removed_domains = set()
     if action == 'add':
         domain, name, domains = domain_group(request.get('domain'), request.get('extra_domains'))
         if any(domain == d or domain.endswith('.' + d) for r in current for d in r['domains']):
@@ -171,6 +172,7 @@ def apply(request):
             if not isinstance(values, list) or not 1 <= len(values) <= 40:
                 raise RoutingError('Укажите от 1 до 40 доменов.')
             domains = list(dict.fromkeys(domain_name(value) for value in values))
+            removed_domains = set(rule['domains']) - set(domains)
             commands = [('set', f'pbr.{section}.dest_addr={" ".join(domains)}')]
     # Refuse to commit someone else's pending LuCI/UCI edits.
     if run('uci', 'changes', 'pbr').strip():
@@ -192,10 +194,11 @@ def apply(request):
         for rule in policies():
             if rule['enabled']:
                 run('nft', 'list', 'set', 'inet', 'fw4', 'pbr_awg0_4_dst_ip_' + rule['id'])
-        # A changed list must not retain IPs belonging to removed domains;
+        # Additive edits must preserve cached client addresses, which may differ
+        # from a fresh router lookup. Drop this set only when names were removed;
         # keep the full snapshot separately for rollback.
         retained = {name: values for name, values in saved_ipsets.items()
-                    if action != 'update_domains' or name != 'pbr_awg0_4_dst_ip_' + section}
+                    if not removed_domains or name != 'pbr_awg0_4_dst_ip_' + section}
         restore_ipsets(retained)
         if action in ('add', 'update_domains') or request.get('enabled') is True:
             warm_domains(domains)
