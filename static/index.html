@@ -15,6 +15,13 @@
 <div class="table-scroll"><table class="guest-table" role="table" aria-label="VM и контейнеры"><thead role="rowgroup"><tr role="row"><th role="columnheader">ID / Имя</th><th role="columnheader">Тип / Узел</th><th role="columnheader">Состояние</th><th role="columnheader">CPU</th><th role="columnheader">RAM</th><th role="columnheader">Управление</th></tr></thead><tbody id="guests" role="rowgroup"></tbody></table></div><p id="guest-feedback" class="guest-feedback" role="status" hidden></p></div></section>
 <div class="lower-grid"><section id="storage"><div class="section-heading"><h2>03 / Хранилища</h2><span>STORAGE</span></div><div id="disks" class="panel disk-list"></div></section><section id="services"><div class="section-heading"><h2>04 / Сервисы и сеть</h2><span>ACCESS POINTS</span></div><div id="service-list" class="services"></div></section></div>
 <section id="network"><div class="section-heading"><h2>05 / OpenWrt · состояние служб</h2><span id="router-connection">ОЖИДАНИЕ</span></div><div id="router-notice" class="router-notice" role="status"></div><div id="router-cards" class="router-cards"></div><div id="router-probes" class="router-probes"></div><p class="note">Процесс и доступность порта проверяются отдельно. Запущенный zapret не гарантирует обход блокировок; открытый порт прокси не проверяет вход в Telegram. VPN-интерфейс и handshake не заменяют проверку маршрута.</p>
+<div class="panel diagnostic-panel">
+  <div class="panel-label">NETWORK CHECK / ДИАГНОСТИКА</div><h3>Проверить сайт</h3>
+  <form id="diagnostic-form"><label for="diagnostic-target">Домен или HTTP(S)-ссылка на страницу, картинку, CDN</label><div class="awg-input"><input id="diagnostic-target" type="text" maxlength="2048" required placeholder="example.com или ссылка на ресурс" autocomplete="off"><button id="diagnostic-run" type="submit">Проверить сайт</button></div></form>
+  <p class="note">DNS, общее правило PBR и сравнение соединения через WAN/AWG. Проверка выполняется с роутера для публичных адресов и портов 80/443. AWG и сетевые службы не перезапускаются.</p>
+  <p id="diagnostic-feedback" role="status">Можно проверить отдельно страницу и домен её медиа.</p>
+  <div id="diagnostic-result" aria-live="polite"></div>
+</div>
 <div class="panel awg-panel">
   <div class="awg-heading"><div><div class="panel-label">AMNEZIAWG / МАРШРУТЫ</div><h3>Сайты через AWG</h3></div><button id="awg-refresh" type="button">Обновить список</button></div>
   <p class="note">Переключатель включает AWG для всей сети. Выключенный сайт остаётся в списке со своими доменами и использует обычный маршрут сети.</p>

@@ -204,6 +204,40 @@ $('refresh').onclick=refresh;
 $('settings').onclick=()=>$('config-dialog').showModal();
 document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{document.querySelectorAll('nav a').forEach(n=>n.classList.toggle('active',n===a));});
 let awgState=null, awgBusy=false;
+let diagnosticBusy=false;
+function renderDiagnostic(data) {
+  const path=device=>device===data.network?.awg_device?'AWG':device===data.network?.wan_device?'WAN':device||'Не определён';
+  const states={ok:'Ответ получен',limited:'Ответ превышает лимит проверки',timeout:'Тайм-аут / неполная загрузка',tls_error:'Ошибка TLS',connection_error:'Ошибка соединения',unavailable:'Проверка недоступна'};
+  const dns=data.dns||{};
+  $('diagnostic-result').innerHTML=`<div class="diagnostic-summary"><strong>${esc(data.target)}</strong><small>${esc(new Date(data.checked_at*1000).toLocaleString('ru-RU'))}</small></div>
+    <div class="diagnostic-dns"><b>DNS роутера · IPv4</b><p>${esc(dns.ipv4?.join(', ')||'Адреса не получены')} <small>(${esc(dns.a_state)})</small></p><details><summary>IPv6 · ${dns.ipv6?.length||0} адресов</summary><p>${esc(dns.ipv6?.join(', ')||'Нет адресов')} · HTTP по IPv6 не проверяется.</p></details></div>
+    <div class="diagnostic-rules"><b>Доменное правило</b><p>${data.rules?.length?data.rules.map(rule=>`${esc(rule.name)} · ${esc(rule.interface)} · ${rule.enabled?'включено':'выключено'}${rule.restricted?' · с ограничениями':''}`).join('<br>'):'Совпадений нет'}</p></div>
+    <div><b>Текущий маршрут общих правил</b>${(data.routes||[]).map(route=>`<p class="diagnostic-route">${esc(route.address)} → <strong>${esc(route.state==='ok'?path(route.device):'Не определён')}</strong><small>${esc(route.matched_rule||'Стандартный маршрут')} · ${esc(route.device||'—')}</small></p>`).join('')||'<p>Маршрут не проверен.</p>'}</div>
+    <div class="diagnostic-probes">${(data.probes||[]).map(probe=>`<article class="diagnostic-probe"><strong>${esc(path(probe.device))}</strong><small>${esc(probe.address)}</small><b class="${probe.state==='ok'&&probe.http_status<400?'positive':'diagnostic-failure'}">HTTP ${esc(probe.http_status||'—')}</b><span>${esc(states[probe.state]||probe.state)}</span><small>${fmt(probe.bytes||0)} байт · ${fmt(probe.seconds||0,3)} с${probe.redirect_host?' · перенаправление: '+esc(probe.redirect_host):''}</small>${probe.redirect_target?`<button type="button" data-diagnostic-redirect="${esc(probe.redirect_target)}">Проверить перенаправление</button><small>${esc(probe.redirect_target)}</small>`:''}</article>`).join('')}</div>
+    <ul class="note diagnostic-notes">${(data.warnings||[]).map(note=>`<li>${esc(note)}</li>`).join('')}</ul>`;
+}
+async function checkSite(target) {
+  if(diagnosticBusy)return;
+  diagnosticBusy=true;$('diagnostic-run').disabled=true;
+  $('diagnostic-feedback').classList.remove('diagnostic-failure');
+  $('diagnostic-feedback').textContent='Проверяем DNS, правила и соединение… до 40 секунд.';
+  $('diagnostic-result').innerHTML='';
+  try {
+    const response=await fetch('/api/router/diagnose',{method:'POST',headers:{'Content-Type':'application/json','X-NERV-Action':'site-diagnostics'},body:JSON.stringify({target}),signal:AbortSignal.timeout(40000)});
+    const data=await response.json();
+    if(!response.ok)throw Error(data.error||'Не удалось выполнить проверку.');
+    renderDiagnostic(data);
+    $('diagnostic-feedback').textContent='Проверка завершена. Сетевые настройки не изменялись.';
+  } catch(error) {
+    $('diagnostic-feedback').classList.add('diagnostic-failure');
+    $('diagnostic-feedback').textContent=error.name==='TimeoutError'||error.name==='AbortError'?'Ответ не получен за 40 секунд. Сетевые службы не перезапускались.':error.message;
+  } finally {diagnosticBusy=false;$('diagnostic-run').disabled=false;}
+}
+$('diagnostic-form').onsubmit=event=>{event.preventDefault();checkSite($('diagnostic-target').value.trim());};
+$('diagnostic-result').onclick=event=>{
+  const button=event.target.closest('[data-diagnostic-redirect]');
+  if(button&&!diagnosticBusy){$('diagnostic-target').value=button.dataset.diagnosticRedirect;checkSite(button.dataset.diagnosticRedirect);}
+};
 function awgControls(disabled) {
   $('awg-refresh').disabled=awgBusy;
   for(const id of ['awg-domain','awg-add','awg-extra','awg-preset']) $(id).disabled=disabled;

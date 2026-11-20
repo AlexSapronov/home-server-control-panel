@@ -135,6 +135,38 @@ with sync_playwright() as p:
     page.get_by_text('OpenWrt недоступен', exact=True).wait_for()
     assert page.locator('#awg-add').is_disabled()
     assert page.get_by_role('switch', name='AWG для YouTube', exact=True).is_disabled()
+    diagnostic_requests=[]
+    diagnostic={'target':'rutracker.org','checked_at':1700000000,'read_only':True,
+      'dns':{'ipv4':['1.1.1.1'],'ipv6':[],'a_state':'ok','aaaa_state':'no_records'},'rules':[],
+      'routes':[{'address':'1.1.1.1','state':'ok','device':'eth1','matched_rule':None}],
+      'network':{'wan_device':'eth1','awg_device':'awg0'},'warnings':['Активного общего доменного правила для этого имени нет.'],
+      'probes':[{'device':'eth1','address':'1.1.1.1','state':'timeout','http_status':200,'bytes':17327,'seconds':8},
+                {'device':'awg0','address':'1.1.1.1','state':'ok','http_status':301,'bytes':162,'seconds':0.3,'redirect_host':'rutracker.org','redirect_target':'https://rutracker.org/forum/index.php'}]}
+    def diagnostic_api(route):
+        diagnostic_requests.append(route.request.post_data_json)
+        assert route.request.headers.get('x-nerv-action')=='site-diagnostics'
+        route.fulfill(json=diagnostic)
+    page.route('**/api/router/diagnose',diagnostic_api)
+    page.fill('#diagnostic-target','https://rutracker.org/')
+    page.click('#diagnostic-run')
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Проверка завершена')
+    assert diagnostic_requests==[{'target':'https://rutracker.org/'}]
+    assert 'Тайм-аут / неполная загрузка' in page.locator('#diagnostic-result').inner_text()
+    assert page.locator('.diagnostic-probe').count()==2
+    page.get_by_role('button',name='Проверить перенаправление',exact=True).click()
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Проверка завершена')
+    assert diagnostic_requests[-1]=={'target':'https://rutracker.org/forum/index.php'}
+    page.locator('.diagnostic-panel').screenshot(path='docs/diagnostics-desktop.png')
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    page.locator('.diagnostic-panel').screenshot(path='docs/diagnostics-mobile.png')
+    page.unroute('**/api/router/diagnose')
+    page.route('**/api/router/diagnose',lambda route:route.fulfill(status=400,json={'error':'Локальные адреса запрещены.'}))
+    page.fill('#diagnostic-target','http://127.0.0.1/')
+    page.click('#diagnostic-run')
+    expect(page.locator('#diagnostic-feedback')).to_have_text('Локальные адреса запрещены.')
+    assert page.locator('#diagnostic-run').is_enabled()
+    assert page.locator('#diagnostic-result').inner_text()==''
     assert not errors, errors
     browser.close()
 print('Browser checks passed: filtering, theme persistence, dialog, API failure/recovery, mobile overflow, no JS errors.')

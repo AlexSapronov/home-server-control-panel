@@ -135,6 +135,12 @@ def warm_domains(domains):
 
 def apply(request):
     action = request.get('action')
+    if action == 'diagnose':
+        from nerv_diagnostics import diagnose, DiagnosticError
+        try:
+            return diagnose(request.get('target'))
+        except DiagnosticError as error:
+            raise RoutingError(str(error)) from None
     if action == 'list':
         return state()
     if action not in ('add', 'set_enabled', 'update_domains'):
