@@ -484,3 +484,33 @@ transition:none!important}
 .guest-feedback {margin:0;padding:12px 20px;border-top:1px solid var(--line);color:var(--good);overflow-wrap:anywhere}
 .guest-feedback.failure {color:var(--secondary)}
 .power-dialog-buttons {display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+
+.guest-overview {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--line)}
+.guest-overview div {display:grid;gap:5px;padding:14px 20px}
+.guest-overview div + div {border-left:1px solid var(--line)}
+.guest-overview strong {font-size:22px;color:var(--accent)}
+.guest-overview span,.guest-results {font-size:12px;color:var(--muted)}
+.guest-results {display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px 20px}
+.guest-results button {padding:5px 8px}
+.favorite-filter,.guest-identity {display:flex;align-items:center;gap:8px}
+.favorite-filter input {accent-color:var(--accent);width:16px;height:16px}
+.favorite {min-width:34px;min-height:34px;padding:3px;font-size:19px;color:var(--muted)}
+.favorite[aria-pressed="true"] {color:var(--accent)}
+.guest-name {white-space:normal;overflow-wrap:anywhere}
+.mobile-metric {display:none}
+.stale .guest-overview {opacity:.55}
+@media(max-width:760px) {
+  .guest-overview div,.guest-results {padding-inline:12px}
+  #guest-search {flex-basis:100%;max-width:none}
+  .guest-table,.guest-table tbody {display:block;white-space:normal}
+  .guest-table thead {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .guest-table tbody tr {display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;padding:14px 12px;border-top:1px solid var(--line)}
+  .guest-table td {min-width:0;padding:0;border:0}
+  .guest-name,.guest-controls,.guest-empty {grid-column:1 / -1}
+  .guest-kind,.guest-state {overflow-wrap:anywhere}
+  .guest-state {justify-self:end;text-align:right}
+  .guest-table td.guest-metric {background:var(--panel);border-left:1px solid var(--line);padding-left:8px}
+  .mobile-metric {display:block;font-size:10px;color:var(--muted);margin-bottom:3px}
+  .favorite,.guest-actions button {min-height:44px}
+  .favorite {min-width:44px}
+}

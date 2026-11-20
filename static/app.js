@@ -11,14 +11,25 @@ const powerLabels = {start:'Запустить', shutdown:'Выключить', 
 const guestStatuses = {running:'Запущена', stopped:'Выключена', paused:'Приостановлена'};
 const pendingGuests = new Set();
 let guestMarkup = '';
+let favorites = new Set();
+try {
+  const saved = JSON.parse(localStorage.getItem('nerv-guest-favorites'));
+  if (Array.isArray(saved)) favorites = new Set(saved.filter(Number.isInteger));
+} catch {}
 
 function guests() {
   const status = $('guest-filter').value, type = $('guest-type').value;
   const query = $('guest-search').value.trim().toLowerCase();
-  const rows = (current?.guests || []).filter(g =>
+  const favoritesOnly = $('guest-favorites').checked;
+  const inventory = current?.guests || [];
+  const rows = inventory.filter(g =>
+    (!favoritesOnly || favorites.has(g.vmid)) &&
     (status === 'all' || g.status === status) && (type === 'all' || g.type === type) &&
     [g.name, g.vmid, g.node].some(value => String(value ?? '').toLowerCase().includes(query))
-  ).sort((a,b) => a.vmid - b.vmid);
+  ).sort((a,b) => Number(favorites.has(b.vmid)) - Number(favorites.has(a.vmid)) || a.vmid - b.vmid);
+  $('guest-reset').hidden = !query && status === 'all' && type === 'all' && !favoritesOnly;
+  const results = current ? `Показано ${rows.length} из ${inventory.length}` : '';
+  if ($('guest-results').textContent !== results) $('guest-results').textContent = results;
   const markup = rows.map(g => {
     const allowed = current.managed_vmids?.includes(g.vmid) && !g.template;
     const actions = g.status === 'running' ? ['shutdown', 'reboot'] : g.status === 'stopped' ? ['start'] : [];
@@ -27,19 +38,24 @@ function guests() {
     const buttons = allowed && actions.length ? actions.map(action =>
       `<button type="button" data-vmid="${esc(g.vmid)}" data-power="${action}" aria-label="${powerLabels[action]} ${esc(g.name || g.vmid)}" ${disabled?'disabled':''}>${powerLabels[action]}</button>`
     ).join('') : '—';
-    return `<tr><td><span class="vm-id">${esc(g.vmid)}</span>${esc(g.name)}<small>${g.template?'Шаблон':g.type==='qemu'?'Виртуальная машина':'Контейнер'}</small></td>
-      <td>${esc(g.type.toUpperCase())}<small>${esc(g.node)}</small></td>
-      <td>${badge(g.status, guestStatuses[g.status])}${pending?'<small>Операция выполняется</small>':''}</td>
-      <td>${g.status==='running'?fmt(g.cpu*100,1)+' %':'—'}</td><td>${bytes(g.mem)}<small>из ${bytes(g.maxmem)}</small></td>
-      <td><div class="guest-actions">${buttons}</div></td></tr>`;
-  }).join('') || '<tr><td colspan="6" class="empty">Машины не найдены</td></tr>';
+    const favorite = favorites.has(g.vmid);
+    return `<tr role="row"><td role="cell" class="guest-name"><div class="guest-identity">
+      <button type="button" class="favorite" data-favorite="${esc(g.vmid)}" aria-label="Избранное: ${esc(g.name || g.vmid)}" aria-pressed="${favorite}">${favorite?'★':'☆'}</button>
+      <div><span class="vm-id">${esc(g.vmid)}</span><strong>${esc(g.name)}</strong></div></div></td>
+      <td role="cell" class="guest-kind">${esc(g.type.toUpperCase())}<small>${esc(g.node)}</small></td>
+      <td role="cell" class="guest-state">${badge(g.status, guestStatuses[g.status])}${pending?'<small>Операция выполняется</small>':''}</td>
+      <td role="cell" class="guest-metric"><span class="mobile-metric">CPU</span>${g.status==='running'?fmt(g.cpu*100,1)+' %':'—'}</td>
+      <td role="cell" class="guest-metric"><span class="mobile-metric">RAM</span>${bytes(g.mem)}<small>из ${bytes(g.maxmem)}</small></td>
+      <td role="cell" class="guest-controls"><div class="guest-actions">${buttons}</div></td></tr>`;
+  }).join('') || `<tr role="row"><td colspan="6" role="cell" class="empty guest-empty">${favoritesOnly && !favorites.size?'Нажмите ☆ рядом с машиной, чтобы добавить её в избранное.':'Машины не найдены'}</td></tr>`;
   if (markup !== guestMarkup) {
     const focused = document.activeElement;
     $('guests').innerHTML = guestMarkup = markup;
-    if (focused?.dataset.power) {
+    if (focused?.dataset.power || focused?.dataset.favorite) {
       const replacement = Array.from($('guests').querySelectorAll('button')).find(button =>
+        focused.dataset.favorite ? button.dataset.favorite === focused.dataset.favorite :
         button.dataset.vmid === focused.dataset.vmid && button.dataset.power === focused.dataset.power);
-      replacement?.focus({preventScroll:true});
+      (replacement && !replacement.disabled ? replacement : $('guest-search')).focus({preventScroll:true});
     }
   }
 }
@@ -138,7 +154,10 @@ function render(data) {
   for(const [id,index] of [['cpu-line',0],['ram-line',1]]) {
     $(id).setAttribute('points',history.map((h,i)=>h[index]===null?'':`${i*1000/59},${90-Math.max(0,Math.min(100,h[index]))*.8}`).join(' '));
   }
-  $('guest-count').textContent=`${data.guests.filter(g=>g.status==='running').length} RUNNING / ${data.guests.length} TOTAL`; guests();
+  $('guest-total').textContent = data.guests.length;
+  $('guest-running').textContent = data.guests.filter(g => g.status === 'running').length;
+  $('guest-stopped').textContent = data.guests.filter(g => g.status === 'stopped').length;
+  guests();
   $('disks').innerHTML=data.storage.map(s=>`<div class="disk"><div class="disk-heading"><span>${esc(s.storage)}</span><span>${fmt(pct(s.disk,s.maxdisk),1)} %</span></div><div class="disk-track"><span class="disk-fill" data-fill="${pct(s.disk,s.maxdisk)||0}"></span></div><div class="disk-foot"><span>${bytes(s.disk)} / ${bytes(s.maxdisk)}</span><span>${esc(s.node)} · ${esc(s.status||'unknown')}</span></div></div>`).join('')||'<p class="empty">Хранилища недоступны</p>';
   document.querySelectorAll('[data-fill]').forEach(el=>el.style.width=el.dataset.fill+'%');
   $('service-list').innerHTML=data.services.filter(s=>{try{return ['http:','https:'].includes(new URL(s.url).protocol);}catch{return false;}}).map(s=>`<a class="service" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"><b>${esc(s.name)} <span>↗</span></b><small>${esc(s.description||new URL(s.url).host)}</small></a>`).join('')||'<div class="panel empty">Добавьте ссылки на Proxmox, OpenWrt, AdGuard и другие сервисы в config.json.</div>';
@@ -158,7 +177,24 @@ $('theme').onchange=()=>{document.body.dataset.theme=$('theme').value;try{localS
 $('guest-filter').onchange = guests;
 $('guest-type').onchange = guests;
 $('guest-search').oninput = guests;
+$('guest-favorites').onchange = guests;
+$('guest-reset').onclick = () => {
+  $('guest-filter').value = $('guest-type').value = 'all';
+  $('guest-search').value = '';
+  $('guest-favorites').checked = false;
+  guests();
+  $('guest-search').focus();
+};
 $('guests').onclick = event => {
+  const favorite = event.target.closest('button[data-favorite]');
+  if (favorite) {
+    const vmid = Number(favorite.dataset.favorite);
+    if (favorites.has(vmid)) favorites.delete(vmid);
+    else favorites.add(vmid);
+    try { localStorage.setItem('nerv-guest-favorites', JSON.stringify([...favorites])); } catch {}
+    guests();
+    return;
+  }
   const button = event.target.closest('button[data-power]');
   if (!button || button.disabled) return;
   const guest = current.guests.find(g => String(g.vmid) === button.dataset.vmid);
