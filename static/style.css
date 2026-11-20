@@ -499,6 +499,9 @@ transition:none!important}
 .diagnostic-probes {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px}
 .diagnostic-probe {display:grid;gap:8px;border:1px solid var(--line);padding:14px;overflow-wrap:anywhere;font-size:12px}
 .diagnostic-notes {padding-left:18px;line-height:1.8}
+.diagnostic-action {display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
+.diagnostic-action small {color:var(--muted);overflow-wrap:anywhere}
+.diagnostic-panel button:disabled {opacity:.45;cursor:default}
 @media(max-width:700px) {.diagnostic-panel{padding:16px}.diagnostic-probes{grid-template-columns:1fr}.diagnostic-summary{flex-direction:column}#diagnostic-run{min-height:44px}}
 .awg-heading,.awg-rule,.awg-input {display:flex;align-items:center;justify-content:space-between;gap:14px}
 .awg-heading h3 {margin:8px 0 0}
