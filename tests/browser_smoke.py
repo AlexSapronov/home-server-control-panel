@@ -44,6 +44,20 @@ with sync_playwright() as p:
     page.select_option('#theme','NERV')
     page.screenshot(path='docs/mobile.png',full_page=True)
     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+    assert page.locator('#guest-total').inner_text() == '2'
+    favorite = page.get_by_role('button', name='Избранное: Media · пример')
+    favorite.click()
+    assert favorite.get_attribute('aria-pressed') == 'true'
+    assert 'Media' in page.locator('#guests tr').first.inner_text()
+    page.check('#guest-favorites')
+    assert page.locator('#guest-results').inner_text() == 'Показано 1 из 2'
+    assert page.locator('#guests tr').count() == 1
+    page.click('#guest-reset')
+    assert page.locator('#guests tr').count() == 2
+    assert page.locator('#guests tr').first.evaluate("(row) => getComputedStyle(row).display") == 'grid'
+    page.reload()
+    favorite.wait_for()
+    assert favorite.get_attribute('aria-pressed') == 'true'
     demo['mode'] = 'live'
     demo['managed_vmids'] = [101]
     upid = 'UPID:homeserver:00000000:00000000:00000000:vzstart:101:nerv@pve!panel:'
