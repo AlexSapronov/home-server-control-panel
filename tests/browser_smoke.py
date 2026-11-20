@@ -142,10 +142,17 @@ with sync_playwright() as p:
       'network':{'wan_device':'eth1','awg_device':'awg0'},'warnings':['Активного общего доменного правила для этого имени нет.'],
       'probes':[{'device':'eth1','address':'1.1.1.1','state':'timeout','http_status':200,'bytes':17327,'seconds':8},
                 {'device':'awg0','address':'1.1.1.1','state':'ok','http_status':301,'bytes':162,'seconds':0.3,'redirect_host':'rutracker.org','redirect_target':'https://rutracker.org/forum/index.php'}]}
+    diagnostic_state={'linked':False,'fail':False,'reads':0,'mutations':[]}
     def diagnostic_api(route):
         diagnostic_requests.append(route.request.post_data_json)
         assert route.request.headers.get('x-nerv-action')=='site-diagnostics'
-        route.fulfill(json=diagnostic)
+        data=dict(diagnostic)
+        if diagnostic_state['linked']:
+            rules=[rule for rule in awg['rules'] if 'rutracker.org' in rule['domains']]
+            data['rules']=[dict(rule,interface='awg0',restricted=False) for rule in rules]
+            enabled=any(rule['enabled'] for rule in rules)
+            data['routes']=[dict(route,device='awg0' if enabled else 'eth1',matched_rule='rutracker.org' if enabled else None) for route in diagnostic['routes']]
+        route.fulfill(json=data)
     page.route('**/api/router/diagnose',diagnostic_api)
     page.fill('#diagnostic-target','https://rutracker.org/')
     page.click('#diagnostic-run')
@@ -160,6 +167,78 @@ with sync_playwright() as p:
     page.set_viewport_size({'width':390,'height':844})
     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
     page.locator('.diagnostic-panel').screenshot(path='docs/diagnostics-mobile.png')
+    # A completed check itself must never change routing.
+    assert diagnostic_state['mutations']==[]
+    def diagnostic_awg_api(route):
+        if route.request.method=='POST':
+            payload=route.request.post_data_json
+            diagnostic_state['mutations'].append(payload)
+            assert route.request.headers.get('x-nerv-action')=='awg-routing'
+            if diagnostic_state['fail']:
+                diagnostic_state['fail']=False
+                route.fulfill(status=409,json={'error':'Список изменён. Повторите проверку.'})
+                return
+            if payload['action']=='add':
+                awg['rules'].append({'id':'diagnostic-site','name':payload['domain'],'domains':[payload['domain']],'enabled':True})
+            elif payload['action']=='set_enabled':
+                next(rule for rule in awg['rules'] if rule['id']==payload['id'])['enabled']=payload['enabled']
+            awg['revision']='diagnostic-'+str(len(diagnostic_state['mutations']))
+        else:
+            diagnostic_state['reads']+=1
+        route.fulfill(json=awg)
+    page.unroute('**/api/router/awg-sites')
+    page.route('**/api/router/awg-sites',diagnostic_awg_api)
+    diagnostic_state['linked']=True
+    page.click('#awg-refresh')
+    expect(page.locator('#awg-feedback')).to_have_text('Список получен с OpenWrt.')
+    page.fill('#awg-domain','keep.example.org')
+    page.fill('#diagnostic-target','https://wrong.example.org/')
+    previous_revision=awg['revision']
+    reads=diagnostic_state['reads']
+    page.get_by_role('button',name='Включить через AWG',exact=True).click()
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Доменное правило AWG включено для всей сети')
+    assert diagnostic_state['reads']>reads
+    assert diagnostic_state['mutations'][0]=={'action':'add','domain':'rutracker.org','revision':previous_revision}
+    assert page.input_value('#diagnostic-target')=='https://rutracker.org/forum/index.php'
+    assert page.input_value('#awg-domain')=='keep.example.org'
+    assert page.get_by_text('Доменное правило AWG уже включено.',exact=True).is_visible()
+    assert len([rule for rule in awg['rules'] if rule['id']=='diagnostic-site'])==1
+    saved=next(rule for rule in awg['rules'] if rule['id']=='diagnostic-site')
+    saved['enabled']=False
+    awg['revision']='external-change'
+    page.click('#diagnostic-run')
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Проверка завершена')
+    page.get_by_role('button',name='Включить сохранённое правило AWG',exact=True).click()
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Доменное правило AWG включено для всей сети')
+    assert diagnostic_state['mutations'][-1]=={'action':'set_enabled','id':'diagnostic-site','enabled':True,'revision':'external-change'}
+    # Concurrent enabling is detected by a fresh list; no duplicate POST.
+    saved['enabled']=False
+    page.click('#diagnostic-run')
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Проверка завершена')
+    saved['enabled']=True
+    count=len(diagnostic_state['mutations'])
+    page.get_by_role('button',name='Включить сохранённое правило AWG',exact=True).click()
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Доменное правило AWG включено для всей сети')
+    assert len(diagnostic_state['mutations'])==count
+    saved['enabled']=False
+    page.click('#diagnostic-run')
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Проверка завершена')
+    diagnostic_state['fail']=True
+    page.get_by_role('button',name='Включить сохранённое правило AWG',exact=True).click()
+    expect(page.locator('#diagnostic-feedback')).to_have_text('Список изменён. Повторите проверку.')
+    assert page.locator('#diagnostic-add-awg').is_enabled()
+    assert saved['enabled'] is False
+    page.get_by_role('button',name='Включить сохранённое правило AWG',exact=True).click()
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Доменное правило AWG включено для всей сети')
+    page.locator('.diagnostic-panel').screenshot(path='docs/diagnostics-awg-mobile.png')
+    page.set_viewport_size({'width':1440,'height':1080})
+    page.locator('.diagnostic-panel').screenshot(path='docs/diagnostics-awg-desktop.png')
+    diagnostic_state['linked']=False
+    diagnostic['rules']=[{'id':'direct','name':'Direct WAN','interface':'wan','enabled':True,'restricted':False}]
+    page.click('#diagnostic-run')
+    expect(page.locator('#diagnostic-feedback')).to_contain_text('Проверка завершена')
+    assert page.locator('#diagnostic-add-awg').count()==0
+    assert 'прямое правило WAN' in page.locator('#diagnostic-result').inner_text()
     page.unroute('**/api/router/diagnose')
     page.route('**/api/router/diagnose',lambda route:route.fulfill(status=400,json={'error':'Локальные адреса запрещены.'}))
     page.fill('#diagnostic-target','http://127.0.0.1/')
