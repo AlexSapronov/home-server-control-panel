@@ -203,5 +203,57 @@ $('guests').onclick = event => {
 $('refresh').onclick=refresh;
 $('settings').onclick=()=>$('config-dialog').showModal();
 document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{document.querySelectorAll('nav a').forEach(n=>n.classList.toggle('active',n===a));});
+let awgState=null, awgBusy=false;
+function awgControls(disabled) {
+  $('awg-refresh').disabled=awgBusy;
+  for(const id of ['awg-domain','awg-add','awg-extra','awg-preset']) $(id).disabled=disabled;
+  document.querySelectorAll('[data-awg-toggle],[data-awg-save],[data-awg-domains]').forEach(control=>control.disabled=disabled);
+}
+function renderAwg() {
+  $('awg-list').innerHTML=awgState.rules.map(rule=>`<article class="awg-rule"><div><strong>${esc(rule.name)}</strong><p>${rule.enabled?'Через туннель AWG':'Обычный маршрут сети'}</p><details class="awg-domain-editor"><summary>Домены (${rule.domains.length})</summary><label>Домены и поддомены<textarea data-awg-domains="${esc(rule.id)}" rows="4" aria-label="Домены ${esc(rule.name)}">${esc(rule.domains.join('\n'))}</textarea></label><button type="button" data-awg-save="${esc(rule.id)}">Сохранить домены</button></details></div><button class="awg-switch" type="button" role="switch" aria-checked="${rule.enabled}" data-awg-toggle="${esc(rule.id)}" aria-label="AWG для ${esc(rule.name)}"><span aria-hidden="true"></span>${rule.enabled?'Вкл':'Выкл'}</button></article>`).join('')||'<p class="empty">Сайтов в списке пока нет.</p>';
+  const selected=$('awg-preset').value;
+  $('awg-preset').innerHTML='<option value="">Свой сайт</option>'+(awgState.presets||[]).map(preset=>`<option value="${esc(preset.domain)}">${esc(preset.name)}</option>`).join('');
+  $('awg-preset').value=selected;
+}
+async function awgRequest(payload) {
+  if(awgBusy) return;
+  awgBusy=true; awgControls(true);
+  $('awg-feedback').classList.remove('failure');
+  $('awg-feedback').textContent=payload?'Применяем изменения на роутере…':'Загрузка списка…';
+  const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),160000);
+  try {
+    const options={signal:controller.signal};
+    if(payload) Object.assign(options,{method:'POST',headers:{'Content-Type':'application/json','X-NERV-Action':'awg-routing'},body:JSON.stringify({...payload,revision:awgState.revision})});
+    const response=await fetch('/api/router/awg-sites',options), data=await response.json();
+    if(!response.ok) throw Error(data.error||'Не удалось получить настройки AWG.');
+    awgState=data; renderAwg();
+    if(payload?.action==='add') {$('awg-domain').value='';$('awg-extra').value='';$('awg-preset').value='';}
+    $('awg-feedback').textContent=payload?'Изменения применены для всей сети. Переподключитесь к сайту, чтобы открыть новое соединение.':'Список получен с OpenWrt.';
+  } catch(error) {
+    awgState=null;
+    $('awg-feedback').classList.add('failure');
+    $('awg-feedback').textContent=error.name==='AbortError'?'Ответ не получен. Обновите список перед повтором: изменение могло примениться.':error.message;
+  } finally {clearTimeout(timeout);awgBusy=false;awgControls(!awgState);}
+}
+function splitDomains(value) {return value.split(/[\s,;]+/).filter(Boolean);}
+$('awg-preset').onchange=()=>{
+  const preset=awgState?.presets?.find(item=>item.domain===$('awg-preset').value);
+  $('awg-domain').value=preset?.domain||'';
+  $('awg-extra').value=preset?.domains.slice(1).join('\n')||'';
+};
+$('awg-form').onsubmit=event=>{event.preventDefault();if(awgState&&!awgBusy)awgRequest({action:'add',domain:$('awg-domain').value.trim(),extra_domains:splitDomains($('awg-extra').value)});};
+$('awg-refresh').onclick=()=>awgRequest();
+$('awg-list').onclick=event=>{
+  const button=event.target.closest('[data-awg-toggle],[data-awg-save]');
+  if(!button||button.disabled||!awgState||awgBusy)return;
+  if(button.dataset.awgToggle) {
+    const rule=awgState.rules.find(item=>item.id===button.dataset.awgToggle);
+    if(rule)awgRequest({action:'set_enabled',id:rule.id,enabled:!rule.enabled});
+  } else {
+    const editor=[...document.querySelectorAll('[data-awg-domains]')].find(item=>item.dataset.awgDomains===button.dataset.awgSave);
+    if(editor)awgRequest({action:'update_domains',id:button.dataset.awgSave,domains:splitDomains(editor.value)});
+  }
+};
+awgRequest();
 function clock(){$('clock').textContent=new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});}clock();setInterval(clock,1000);
 refresh();setInterval(()=>{if(!document.hidden)refresh();},5000);

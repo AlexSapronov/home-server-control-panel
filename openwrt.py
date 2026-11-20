@@ -1,4 +1,4 @@
-"""Read-only OpenWrt monitoring over a forced-command SSH key."""
+"""OpenWrt monitoring and AWG routing over separate forced-command SSH keys."""
 import ipaddress
 import json
 import secrets
@@ -131,3 +131,39 @@ def demo_router():
             'probes': {'dns': 'resolved', 'adguard_tcp': 'reachable', 'telegram_tcp': 'reachable'},
             'wan': {'up': True, 'addresses': ['192.168.0.145']},
             'amneziawg': {'state': 'not_configured', 'handshake_age': None}}
+
+
+class RoutingError(Exception):
+    def __init__(self, message, code='unavailable'):
+        super().__init__(message)
+        self.code = code
+
+
+def routing_request(config, payload):
+    if not config.get('enabled') or not config.get('routing_enabled'):
+        raise RoutingError('Управление сайтами AWG не подключено.', 'disabled')
+    try:
+        host = str(ipaddress.ip_address(config['host']))
+        command = ['ssh', '-F', '/dev/null', '-T', '-i', config['routing_identity_file'],
+                   '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+                   '-o', 'StrictHostKeyChecking=yes',
+                   '-o', 'UserKnownHostsFile=' + config['known_hosts_file'],
+                   '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'ConnectTimeout=5',
+                   '-o', 'ClearAllForwardings=yes', '-o', 'PasswordAuthentication=no',
+                   '-o', 'KbdInteractiveAuthentication=no', '-o', 'LogLevel=ERROR',
+                   'root@' + host, 'nerv-awg']
+        response = subprocess.run(command, input=json.dumps(payload), capture_output=True,
+                                  text=True, timeout=150, check=True)
+        if len(response.stdout) > 65536:
+            raise ValueError
+        result = json.loads(response.stdout)
+        if 'error' in result:
+            code = result.get('code')
+            if code not in ('invalid', 'conflict', 'unavailable'):
+                code = 'unavailable'
+            raise RoutingError(str(result['error'])[:300], code)
+        if not isinstance(result.get('rules'), list) or not isinstance(result.get('revision'), str):
+            raise ValueError
+        return result
+    except (KeyError, ValueError, TypeError, AttributeError, OSError, subprocess.SubprocessError):
+        raise RoutingError('Нет ответа OpenWrt. Обновите список перед повтором: операция могла примениться.') from None

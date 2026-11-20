@@ -29,6 +29,8 @@
     "identity_file": "/etc/nerv/ssh/openwrt_ed25519",
     "known_hosts_file": "/etc/nerv/ssh/known_hosts",
     "adguard_port": 3001,
-    "telegram_port": 1443
+    "telegram_port": 1443,
+    "routing_enabled": false,
+    "routing_identity_file": "/etc/nerv/ssh/openwrt_awg_ed25519"
   }
 }

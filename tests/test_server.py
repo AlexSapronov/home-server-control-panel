@@ -59,10 +59,10 @@ class HTTPTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
 
-    def request(self, path, headers=None, method='GET'):
+    def request(self, path, headers=None, method='GET', body=None):
         import http.client
         conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port)
-        conn.request(method, path, headers=headers or {})
+        conn.request(method, path, body=body, headers=headers or {})
         response = conn.getresponse()
         result = response.status, response.read()
         conn.close()
@@ -105,6 +105,30 @@ class HTTPTests(unittest.TestCase):
     def test_no_configuration_or_traversal(self):
         for path in ['/config.json', '/server.py', '/../config.example.json']:
             self.assertEqual(self.request(path)[0], 404)
+
+    def test_awg_requires_password_live_config_and_same_origin(self):
+        config = {'mode': 'live', 'openwrt': {'routing_enabled': True}}
+        auth = base64.b64encode(b'admin:test-password').decode()
+        headers = {'Authorization': 'Basic ' + auth, 'X-NERV-Action': 'awg-routing',
+                   'Content-Type': 'application/json'}
+        path = '/api/router/awg-sites'
+        body = json.dumps({'action': 'add', 'domain': 'example.com', 'revision': 'r'})
+        with patch.object(self.server, 'config', config), patch('server.routing_request') as routing:
+            with patch.dict(os.environ, {'NERV_PASSWORD': ''}):
+                self.assertEqual(self.request(path)[0], 403)
+                self.assertEqual(self.request(path, headers, 'POST', body)[0], 403)
+            with patch.dict(os.environ, {'NERV_PASSWORD': 'test-password'}):
+                self.assertEqual(self.request(path)[0], 401)
+                self.assertEqual(self.request(path, {'Authorization': headers['Authorization']}, 'POST', body)[0], 403)
+                self.assertEqual(self.request(path, dict(headers, **{'Sec-Fetch-Site': 'cross-site'}), 'POST', body)[0], 403)
+                self.assertEqual(self.request(path, headers, 'POST', 'not-json')[0], 400)
+                routing.assert_not_called()
+                routing.return_value = {'rules': [], 'revision': 'new'}
+                self.assertEqual(self.request(path, headers, 'POST', body)[0], 200)
+                routing.assert_called_once_with(config['openwrt'], json.loads(body))
+                self.assertEqual(self.request(path, headers)[0], 200)
+            with patch.object(self.server, 'config', dict(config, mode='demo')):
+                self.assertEqual(self.request(path)[0], 403)
 
     def test_sanitized_errors(self):
         with patch('server.snapshot', side_effect=ValueError('secret-value')):
