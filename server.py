@@ -6,12 +6,9 @@ import json
 import os
 import ssl
 import time
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from dpi_policy import DPIError
-from dpi_store import DPIStore
 from openwrt import router_snapshot, demo_router
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
@@ -104,82 +101,30 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         super().end_headers()
 
-    def authorized(self):
-        password = os.environ.get('NERV_PASSWORD')
-        expected = 'Basic ' + base64.b64encode(('admin:' + (password or '')).encode()).decode()
-        if not password or self.has_token(expected):
-            return True
-        self.send_response(401)
-        self.send_header('WWW-Authenticate', 'Basic realm="NERV"')
-        self.end_headers()
-        return False
-
-    def has_token(self, expected):
-        return hmac.compare_digest(self.headers.get('Authorization', '').encode(), expected.encode())
-
-    def respond(self, code, data):
-        body = json.dumps(data, ensure_ascii=False, allow_nan=False).encode()
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
     def do_GET(self):
-        if not self.authorized():
-            return
-        store = getattr(self.server, 'dpi', None)
-        if self.path == '/api/dpi':
-            self.respond(200, store.status() if store else {'enabled': False})
-        elif self.path == '/api/status':
+        password = os.environ.get('NERV_PASSWORD')
+        if password:
+            expected = 'Basic ' + base64.b64encode(('admin:' + password).encode()).decode()
+            if not hmac.compare_digest(self.headers.get('Authorization', ''), expected):
+                self.send_response(401)
+                self.send_header('WWW-Authenticate', 'Basic realm="NERV"')
+                self.end_headers()
+                return
+        if self.path == '/api/status':
             try:
                 data, code = snapshot(self.server.config), 200
             except (KeyError, ValueError, ConnectionError, OSError):
                 data, code = {'error': 'Нет данных Proxmox. Проверьте конфигурацию, TLS-сертификат и API-токен.'}, 502
-            self.respond(code, data)
-        elif urlsplit(self.path).path in ('/', '/index.html', '/app.js', '/style.css', '/dpi.js'):
+            body = json.dumps(data, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif urlsplit(self.path).path in ('/', '/index.html', '/app.js', '/style.css'):
             super().do_GET()
         else:
             self.send_error(404)
-
-    def do_POST(self):
-        store = getattr(self.server, 'dpi', None)
-        path = self.path.split('/')
-        if not store or len(path) != 5 or path[1:3] != ['api', 'dpi']:
-            self.respond(404, {'error': 'Операция недоступна.'})
-            return
-        role, action = path[3:]
-        handlers = {'worker': {'claim': lambda _: store.claim(), 'report': store.report,
-                               'heartbeat': lambda body: store.worker_heartbeat(body['id'])},
-                    'router': {'sync': store.router}, 'lan': {'probe': store.lan}}
-        if role == 'admin':
-            if not self.authorized():
-                return
-            if self.headers.get('X-NERV-Request') != 'dpi':
-                self.respond(403, {'error': 'Требуется запрос из панели.'})
-                return
-            handle = lambda body: store.admin(action, body)
-        else:
-            handle = handlers.get(role, {}).get(action)
-            token = getattr(self.server, 'dpi_tokens', {}).get(role)
-            if not handle or not token or not self.has_token('Bearer ' + token):
-                self.respond(403, {'error': 'Нет доступа.'})
-                return
-        try:
-            length = int(self.headers.get('Content-Length', '0'))
-            if not 1 <= length <= 2 * 1024 * 1024 or self.headers.get_content_type() != 'application/json':
-                raise DPIError('Требуется JSON допустимого размера.')
-            self.connection.settimeout(10)
-            body = json.loads(self.rfile.read(length))
-            if not isinstance(body, dict):
-                raise DPIError('Ожидается объект JSON.')
-            result = handle(body)
-        except DPIError as exc:
-            self.respond(409, {'error': str(exc)})
-        except (ValueError, TypeError, KeyError, AttributeError, OSError):
-            self.respond(400, {'error': 'Некорректный запрос DPI.'})
-        else:
-            self.respond(200, result)
 
     def do_HEAD(self):
         self.send_error(405)
@@ -196,25 +141,6 @@ def main():
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.config = load_config()
-    dpi_config = server.config.get('dpi', {})
-    if dpi_config.get('enabled'):
-        tokens = {role: os.environ.get('NERV_DPI_' + role.upper() + '_TOKEN', '')
-                  for role in ('worker', 'router', 'lan')}
-        if (not os.environ.get('NERV_PASSWORD') or len(set(tokens.values())) != len(tokens) or
-                any(len(token) < 32 for token in tokens.values())):
-            raise SystemExit('DPI requires NERV_PASSWORD and three distinct machine tokens of at least 32 characters')
-        server.dpi = DPIStore(dpi_config.get('db', '/var/lib/nerv-panel/dpi.sqlite3'), dpi_config)
-        server.dpi_tokens = tokens
-
-        def schedule():
-            while True:
-                try:
-                    server.dpi.tick()
-                except Exception:
-                    print('NERV DPI: scheduler could not update the queue', flush=True)
-                time.sleep(15)
-
-        threading.Thread(target=schedule, daemon=True).start()
     print(f'NERV / {server.config.get("mode", "demo")} / http://{args.host}:{args.port}', flush=True)
     server.serve_forever()
 
